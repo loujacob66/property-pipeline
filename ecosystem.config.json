@@ -1,0 +1,10 @@
+{
+  "apps": [
+    {
+      "name": "property-backfill",
+      "script": "./run_backfill.sh",
+      "cron_restart": "*/30 * * * *",
+      "watch": false
+    }
+  ]
+}
