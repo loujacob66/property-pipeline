@@ -1,5 +1,17 @@
-.venv/
-data/
-*.db
+# Python
 __pycache__/
-*.zip
+*.pyc
+
+# Virtual environment
+.venv/
+
+# Local creds + auth
+credentials.json
+token.pickle
+
+# Data + outputs
+data/
+outputs/
+
+# macOS metadata
+.DS_Store
