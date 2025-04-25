@@ -26,15 +26,16 @@ def generate_rent_yield_report(db_path="data/listings.db", output_csv="rent_yiel
 
     print("📊 Rent Yield Report:")
     for _, row in df.iterrows():
-        address = row['address']
+        full_address = row["address"]
+        city = row["city"]
+        state = row["state"]
+        zip_code = row["zip"]
         price = f"${row['price']:<7}"
         rent = f"${row['estimated_rent']:<5}"
-        city = f"{row['city']:<15}"
-        zip_code = row['zip']
-        yield_colored = colorize_rent_yield(row['rent_yield'])
-        print(f"{address:<52} {city:<15} {zip_code:<6} {price} Rent: {rent} Yield: {yield_colored}")
+        yield_colored = colorize_rent_yield(row["rent_yield"])
+        print(f"{full_address:<45} {city:<15} {state} {zip_code}  {price} Rent: {rent} Yield: {yield_colored}")
 
-    df[["address", "city", "zip", "price", "estimated_rent", "rent_yield"]].to_csv(output_csv, index=False)
+    df[["address", "city", "state", "zip", "price", "estimated_rent", "rent_yield"]].to_csv(output_csv, index=False)
     print(f"\n✅ Report also saved to: {output_csv}")
 
 if __name__ == "__main__":

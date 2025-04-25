@@ -23,7 +23,9 @@ with sqlite3.connect(db_path) as conn:
             url TEXT UNIQUE,
             source TEXT DEFAULT 'compass',
             imported_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            from_collection BOOLEAN DEFAULT NULL
+            from_collection BOOLEAN DEFAULT NULL,
+            tax_information TEXT,
+            mls_type TEXT
         )
     """)
-    print("✅ listings.db initialized with full schema.")
+    print("✅ listings.db initialized with full schema including tax_information and mls_type fields.")

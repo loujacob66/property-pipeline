@@ -10,7 +10,28 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, ROOT)
 
 from lib.zori_utils import load_zori_data
-from lib.db_utils import insert_listings  # Add this missing import
+from lib.db_utils import insert_listings  
+
+import usaddress
+
+def parse_address_components(full_address):
+    try:
+        parsed = usaddress.tag(full_address)[0]
+        street_parts = [
+            parsed.get("AddressNumber", ""),
+            parsed.get("StreetNamePreType", ""),
+            parsed.get("StreetName", ""),
+            parsed.get("StreetNamePostType", ""),
+            parsed.get("OccupancyType", ""),
+            parsed.get("OccupancyIdentifier", "")
+        ]
+        street = " ".join(filter(None, street_parts)).strip()
+        city = parsed.get("PlaceName", "")
+        state = parsed.get("StateName", "")
+        zip_code = parsed.get("ZipCode", "")
+        return street, city, state, zip_code
+    except Exception:
+        return full_address, "", "", ""
 
 def clean_url(raw_url):
     url = raw_url.replace('3D"', "").replace("=\n", "").replace("=\r", "").strip()
@@ -36,21 +57,18 @@ def parse_eml_file(filepath):
         if not next_tr:
             continue
 
-        address, price, beds, baths, sqft = None, None, None, None, None
+        full_address, price, beds, baths, sqft = None, None, None, None, None
         city, state, zip_code = None, None, None
 
         for div in next_tr.find_all("div"):
             text = div.get_text(" ", strip=True)
 
-            if not address:
+            if not full_address:
                 a = div.find("a")
                 if a and "," in a.get_text(strip=True):
-                    address = a.get_text(strip=True)
-                    parts = address.split(", ")
-                    if len(parts) >= 3:
-                        city = parts[-3]
-                        state = parts[-2]
-                        zip_code = parts[-1].split()[0]
+                    full_address = a.get_text(strip=True)
+                    # Use the parse_address_components function to split address correctly
+                    street_address, city, state, zip_code = parse_address_components(full_address)
 
             if "$" in text and not price:
                 m = re.search(r"\$[\d,]+", text)
@@ -70,9 +88,9 @@ def parse_eml_file(filepath):
                 if m:
                     sqft = int(m.group(1).replace(",", ""))
 
-        if href and address:
+        if href and full_address:
             listing = {
-                "address": address,
+                "address": street_address,  # Now just the street part
                 "url": href,
                 "from_collection": True,
                 "price": price,
@@ -93,7 +111,7 @@ def parse_eml_file(filepath):
             a_tag = row.find("a", href=True)
             href = a_tag["href"] if a_tag else None
 
-            price, beds, baths, sqft, address = None, None, None, None, None
+            price, beds, baths, sqft, full_address = None, None, None, None, None
             city, state, zip_code = None, None, None
 
             price_tag = row.find("b")
@@ -120,17 +138,14 @@ def parse_eml_file(filepath):
             for a in row.find_all("a"):
                 text = a.get_text(strip=True)
                 if "," in text and len(text) > 10:
-                    address = text
-                    parts = address.split(", ")
-                    if len(parts) >= 3:
-                        city = parts[-3]
-                        state = parts[-2]
-                        zip_code = parts[-1].split()[0]
+                    full_address = text
+                    # Use the parse_address_components function to split address correctly
+                    street_address, city, state, zip_code = parse_address_components(full_address)
                     break
 
-            if href and address:
+            if href and full_address:
                 listing = {
-                    "address": address,
+                    "address": street_address,  # Now just the street part
                     "url": href,
                     "from_collection": False,
                     "price": price,

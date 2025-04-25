@@ -1,0 +1,22 @@
+{
+  "property_listings": [
+    {
+      "name": "Compass",
+      "id": "Label_4461353129661597509",
+      "description": "Main Compass emails",
+      "enabled": false 
+    },
+    {
+      "name": "Compass/NW Denver",
+      "id": "Label_2438115188872057960",
+      "description": "Northwest Denver listings",
+      "enabled": true
+    },
+    {
+      "name": "Compass/Old Town Arvada",
+      "id": "Label_863906308674991093",
+      "description": "Boulder area listings",
+      "enabled": true
+    }
+  ]
+}
