@@ -407,6 +407,23 @@ def main():
         for filepath in glob.glob(pattern):
             print(f"📥 Parsing {filepath}")
             listings = parse_eml_file(filepath)
+            if listings:
+                print(f"✅ Found {len(listings)} listings in {os.path.basename(filepath)}")
+                for listing in listings:
+                    print("🏡 Address:", listing.get("address", "N/A"))
+                    print("💲 Price:", f"${listing.get('price'):,}" if listing.get("price") else "N/A")
+                    print("🛏 Beds:", listing.get("beds", "N/A"))
+                    print("🛁 Baths:", listing.get("baths", "N/A"))
+                    print("📐 Sqft:", listing.get("sqft", "N/A"))
+                    print("🏙 City/State/Zip:", f"{listing.get('city', 'N/A')}, {listing.get('state', 'N/A')} {listing.get('zip', 'N/A')}")
+                    print("🔗 URL:", listing.get("url", "N/A"))
+                    print("-" * 60)
+                all_listings.extend(listings)
+            else:
+                print(f"⚠️ No listings found in {os.path.basename(filepath)}")
+        for filepath in glob.glob(pattern):
+            print(f"📥 Parsing {filepath}")
+            listings = parse_eml_file(filepath)
             enrich_with_rent(listings, rent_data)
             all_listings.extend(listings)
 
@@ -416,7 +433,6 @@ def main():
         else:
             print(f"🧾 Inserting {len(all_listings)} listings into database...")
             insert_listings(all_listings, source="eml-import")
-        print(f"🧾 Inserting {len(all_listings)} listings into database...")
     else:
         print("⚠️ No listings found.")
 
