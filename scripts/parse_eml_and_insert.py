@@ -10,6 +10,7 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, ROOT)
 
 from lib.zori_utils import load_zori_data
+from lib.db_utils import insert_listings  # Add this missing import
 
 def clean_url(raw_url):
     url = raw_url.replace('3D"', "").replace("=\n", "").replace("=\r", "").strip()
@@ -169,8 +170,15 @@ def main():
     rent_data = load_zori_data(os.path.join(ROOT, "data", "zori_latest.csv"))
 
     all_listings = []
+    processed_files = set()  # Track which files we've already processed
+    
     for pattern in args:
         for filepath in glob.glob(pattern):
+            # Skip if we've already processed this file
+            if filepath in processed_files:
+                continue
+                
+            processed_files.add(filepath)
             print(f"📥 Parsing {filepath}")
             listings = parse_eml_file(filepath)
             enrich_with_rent(listings, rent_data)
@@ -195,8 +203,7 @@ def main():
             print("🚫 Dry-run mode: Skipping database insert.")
         else:
             print(f"🧾 Inserting {len(all_listings)} listings into database...")
-            # Uncomment the following line when you add the import:
-            # insert_listings(all_listings, source="eml-import")
+            insert_listings(all_listings, source="eml-import")
 
     print("\n📝 Summary:")
     print(f"   Total files processed: {len(file_listing_counts)}")
