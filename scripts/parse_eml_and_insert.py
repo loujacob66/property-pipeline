@@ -393,7 +393,9 @@ def enrich_with_rent(listings, rent_data):
                 listing["rent_yield"] = round(12 * rent / listing["price"], 4)
 
 def main():
-    args = sys.argv[1:]
+    import sys
+    dry_run = "--dry-run" in sys.argv
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
     if not args:
         print("Usage: python scripts/parse_eml_and_insert.py data/*.eml")
         return
@@ -409,8 +411,12 @@ def main():
             all_listings.extend(listings)
 
     if all_listings:
+        if dry_run:
+            print("🚫 Dry-run mode: Skipping database insert.")
+        else:
+            print(f"🧾 Inserting {len(all_listings)} listings into database...")
+            insert_listings(all_listings, source="eml-import")
         print(f"🧾 Inserting {len(all_listings)} listings into database...")
-        insert_listings(all_listings, source="eml-import")
     else:
         print("⚠️ No listings found.")
 
