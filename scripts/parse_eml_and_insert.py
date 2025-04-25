@@ -8,7 +8,6 @@ from bs4 import BeautifulSoup
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, ROOT)
 
-from lib.db_utils import insert_listings
 from lib.zori_utils import load_zori_data
 
 def clean_url(raw_url):
@@ -239,7 +238,6 @@ def parse_eml_file(filepath):
                         listing["rent_yield"] = round(12 * listing["estimated_rent"] / price, 4)
 
                 listings.append(listing)
-    else:
         anchors = soup.find_all("a", href=True)
         listings_by_url = {}
         for a in anchors:
@@ -296,7 +294,6 @@ def parse_eml_file(filepath):
                         "estimated_rent": None,
                         "rent_yield": None
                     })
-    else:
         anchors = soup.find_all("a", href=True)
         listings_by_url = {}
         for a in anchors:
@@ -355,7 +352,6 @@ def parse_eml_file(filepath):
                     "estimated_rent": None,
                     "rent_yield": None
                 })
-    else:
         anchors = soup.find_all("a", href=True)
         listings_by_url = {}
         for a in anchors:
@@ -396,6 +392,7 @@ def main():
     import sys
     dry_run = "--dry-run" in sys.argv
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    file_listing_counts = {}  # New: Track per-file listing counts
     if not args:
         print("Usage: python scripts/parse_eml_and_insert.py data/*.eml")
         return
@@ -419,8 +416,7 @@ def main():
                     print("🔗 URL:", listing.get("url", "N/A"))
                     print("-" * 60)
                 all_listings.extend(listings)
-            else:
-                print(f"⚠️ No listings found in {os.path.basename(filepath)}")
+                file_listing_counts[os.path.basename(filepath)] = len(listings)
         for filepath in glob.glob(pattern):
             print(f"📥 Parsing {filepath}")
             listings = parse_eml_file(filepath)
@@ -433,8 +429,17 @@ def main():
         else:
             print(f"🧾 Inserting {len(all_listings)} listings into database...")
             insert_listings(all_listings, source="eml-import")
-    else:
-        print("⚠️ No listings found.")
+        if dry_run:
+            print("🚫 Dry-run mode: Skipping database insert.")
+        if dry_run:
+            print("🚫 Dry-run mode: Skipping database insert.")
+
+    print("\n📝 Summary:")
+    print(f"   Total files processed: {len(file_listing_counts)}")
+    print(f"   Total listings parsed: {sum(file_listing_counts.values())}")
+    print(f"   Listings found per file:")
+    for file, count in file_listing_counts.items():
+        print(f"     - {file}: {count}")
 
 if __name__ == "__main__":
     main()
