@@ -15,3 +15,5 @@ outputs/
 
 # macOS metadata
 .DS_Store
+
+*.zip
