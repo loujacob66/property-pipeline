@@ -1,42 +1,63 @@
 import sqlite3
-import pandas as pd
-import numpy as np
 
-def colorize_rent_yield(y):
-    if y is None or pd.isna(y):
-        return "\033[90m{:<6}\033[0m".format("n/a")
-    elif y >= 0.06:
-        return "\033[92m{:<6.4f}\033[0m".format(y)  # green
-    elif y >= 0.05:
-        return "\033[92m{:<6.4f}\033[0m".format(y)  # green
-    elif y >= 0.04:
-        return "\033[93m{:<6.4f}\033[0m".format(y)  # yellow
-    elif y >= 0.03:
-        return "\033[91m{:<6.4f}\033[0m".format(y)  # red/orange
-    else:
-        return "\033[91m{:<6.4f}\033[0m".format(y)  # red
+def generate_report():
+    db_filename = 'data/listings.db'
+    conn = sqlite3.connect(db_filename)
+    c = conn.cursor()
 
-def generate_rent_yield_report(db_path="data/listings.db", output_csv="rent_yield_report.csv"):
-    conn = sqlite3.connect(db_path)
-    df = pd.read_sql_query("SELECT * FROM listings;", conn)
+    c.execute('''
+        SELECT address, city, state, zip, price, beds, baths, sqft, estimated_rent, rent_yield, mls_number, mls_type, tax_info
+        FROM listings
+        ORDER BY imported_at DESC
+    ''')
+
+    rows = c.fetchall()
+
+    if not rows:
+        print("No listings found.")
+        return
+
+    # Define headers
+    headers = [
+        "Address", "City", "State", "ZIP", "Price", "Beds", "Baths", "Sqft",
+        "Est. Rent", "Yield", "MLS#", "MLS Type", "Tax Info"
+    ]
+
+    # Calculate column widths
+    col_widths = [len(header) for header in headers]
+    for row in rows:
+        for idx, value in enumerate(row):
+            if value is None:
+                value = ""
+            elif isinstance(value, float):
+                value = f"{value:,.2f}" if idx not in [9] else f"{value:.2%}"  # Special formatting for rent_yield
+            elif isinstance(value, int):
+                value = f"{value:,}"
+            else:
+                value = str(value)
+            col_widths[idx] = max(col_widths[idx], len(value))
+
+    # Print header
+    header_row = " | ".join(header.ljust(col_widths[i]) for i, header in enumerate(headers))
+    print(header_row)
+    print("-" * len(header_row))
+
+    # Print data rows
+    for row in rows:
+        formatted_row = []
+        for idx, value in enumerate(row):
+            if value is None:
+                value = ""
+            elif isinstance(value, float):
+                value = f"{value:,.2f}" if idx not in [9] else f"{value:.2%}"  # Special formatting for rent_yield
+            elif isinstance(value, int):
+                value = f"{value:,}"
+            else:
+                value = str(value)
+            formatted_row.append(value.ljust(col_widths[idx]))
+        print(" | ".join(formatted_row))
+
     conn.close()
 
-    df["estimated_rent"] = df["estimated_rent"].round(0).astype("Int64")
-    df = df.sort_values(by="rent_yield", ascending=False)
-
-    print("📊 Rent Yield Report:")
-    for _, row in df.iterrows():
-        full_address = row["address"]
-        city = row["city"]
-        state = row["state"]
-        zip_code = row["zip"]
-        price = f"${row['price']:<7}"
-        rent = f"${row['estimated_rent']:<5}"
-        yield_colored = colorize_rent_yield(row["rent_yield"])
-        print(f"{full_address:<45} {city:<15} {state} {zip_code}  {price} Rent: {rent} Yield: {yield_colored}")
-
-    df[["address", "city", "state", "zip", "price", "estimated_rent", "rent_yield"]].to_csv(output_csv, index=False)
-    print(f"\n✅ Report also saved to: {output_csv}")
-
 if __name__ == "__main__":
-    generate_rent_yield_report()
+    generate_report()

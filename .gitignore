@@ -12,8 +12,10 @@ token.pickle
 # Data + outputs
 data/
 outputs/
+logs/
 
 # macOS metadata
 .DS_Store
 
 *.zip
+.auth/

@@ -1,31 +1,45 @@
 import sqlite3
-from pathlib import Path
+import os
 
-db_path = Path("data/listings.db")
-db_path.parent.mkdir(parents=True, exist_ok=True)
+def init_db():
+    db_folder = 'data'
+    db_filename = os.path.join(db_folder, 'listings.db')
 
-with sqlite3.connect(db_path) as conn:
-    cursor = conn.cursor()
-    cursor.execute("DROP TABLE IF EXISTS listings")
-    cursor.execute("""
-        CREATE TABLE listings (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+    os.makedirs(db_folder, exist_ok=True)  # Ensure 'data/' folder exists
+
+    # Connect and create table first
+    conn = sqlite3.connect(db_filename)
+    c = conn.cursor()
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS listings (
+            id INTEGER PRIMARY KEY,
             address TEXT,
             city TEXT,
             state TEXT,
             zip TEXT,
             price INTEGER,
-            beds INTEGER,
-            baths INTEGER,
+            beds REAL,
+            baths REAL,
             sqft INTEGER,
+            url TEXT,
+            collection INTEGER,
+            source TEXT,
+            imported_at TEXT,
             estimated_rent REAL,
             rent_yield REAL,
-            url TEXT UNIQUE,
-            source TEXT DEFAULT 'compass',
-            imported_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            from_collection BOOLEAN DEFAULT NULL,
-            tax_information TEXT,
-            mls_type TEXT
+            mls_number TEXT,
+            mls_type TEXT,
+            tax_info TEXT
         )
-    """)
-    print("✅ listings.db initialized with full schema including tax_information and mls_type fields.")
+    ''')
+    conn.commit()
+    conn.close()
+
+    # AFTER connection and table creation, check if file now exists
+    if os.path.isfile(db_filename):
+        print(f"✅ Database created successfully: {db_filename}")
+    else:
+        print(f"❌ Error: database was not created.")
+
+if __name__ == "__main__":
+    init_db()
