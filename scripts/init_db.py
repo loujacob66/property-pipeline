@@ -12,24 +12,28 @@ def init_db():
     c = conn.cursor()
     c.execute('''
         CREATE TABLE IF NOT EXISTS listings (
-            id INTEGER PRIMARY KEY,
-            address TEXT,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            address TEXT NOT NULL,
             city TEXT,
             state TEXT,
             zip TEXT,
             price INTEGER,
-            beds REAL,
-            baths REAL,
+            beds INTEGER,
+            baths INTEGER,
             sqft INTEGER,
-            url TEXT,
-            collection INTEGER,
+            price_per_sqft INTEGER,
+            url TEXT NOT NULL,
+            from_collection INTEGER DEFAULT 0,
             source TEXT,
-            imported_at TEXT,
-            estimated_rent REAL,
+            imported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            estimated_rent INTEGER,
             rent_yield REAL,
             mls_number TEXT,
             mls_type TEXT,
-            tax_info TEXT
+            tax_information TEXT,
+            days_on_compass INTEGER,
+            last_updated DATE,
+            favorite INTEGER DEFAULT 0
         )
     ''')
     conn.commit()

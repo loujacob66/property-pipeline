@@ -6,7 +6,9 @@ def generate_report():
     c = conn.cursor()
 
     c.execute('''
-        SELECT address, city, state, zip, price, beds, baths, sqft, estimated_rent, rent_yield, mls_number, mls_type, tax_info
+        SELECT address, city, price, beds, baths, sqft, price_per_sqft, 
+               estimated_rent, rent_yield, mls_number, mls_type, tax_information,
+               days_on_compass, last_updated, favorite
         FROM listings
         ORDER BY imported_at DESC
     ''')
@@ -19,8 +21,9 @@ def generate_report():
 
     # Define headers
     headers = [
-        "Address", "City", "State", "ZIP", "Price", "Beds", "Baths", "Sqft",
-        "Est. Rent", "Yield", "MLS#", "MLS Type", "Tax Info"
+        "Address", "City", "Price", "Beds", "Baths", "Sqft",
+        "Price/Sqft", "Est. Rent", "Yield", "MLS#", "MLS Type", "Tax Info",
+        "Days on Compass", "Last Updated", "Favorite"
     ]
 
     # Calculate column widths
@@ -30,9 +33,12 @@ def generate_report():
             if value is None:
                 value = ""
             elif isinstance(value, float):
-                value = f"{value:,.2f}" if idx not in [9] else f"{value:.2%}"  # Special formatting for rent_yield
+                value = f"{value:,.2f}" if idx not in [8] else f"{value:.2%}"  # Special formatting for rent_yield
             elif isinstance(value, int):
-                value = f"{value:,}"
+                if idx == 14:  # Favorite field
+                    value = "★" if value else ""
+                else:
+                    value = f"{value:,}"
             else:
                 value = str(value)
             col_widths[idx] = max(col_widths[idx], len(value))
@@ -49,9 +55,12 @@ def generate_report():
             if value is None:
                 value = ""
             elif isinstance(value, float):
-                value = f"{value:,.2f}" if idx not in [9] else f"{value:.2%}"  # Special formatting for rent_yield
+                value = f"{value:,.2f}" if idx not in [8] else f"{value:.2%}"  # Special formatting for rent_yield
             elif isinstance(value, int):
-                value = f"{value:,}"
+                if idx == 14:  # Favorite field
+                    value = "★" if value else ""
+                else:
+                    value = f"{value:,}"
             else:
                 value = str(value)
             formatted_row.append(value.ljust(col_widths[idx]))

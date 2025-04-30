@@ -87,7 +87,8 @@ def parse_collection_format(soup):
             
         full_address, price, beds, baths, sqft = None, None, None, None, None
         city, state, zip_code = None, None, None
-        tax_information, mls_type = None, None  # New fields
+        tax_information, mls_type, mls_number = None, None, None
+        days_on_compass, last_updated = None, None
         
         for div in next_tr.find_all("div"):
             text = div.get_text(" ", strip=True)
@@ -96,7 +97,6 @@ def parse_collection_format(soup):
                 a = div.find("a")
                 if a and "," in a.get_text(strip=True):
                     full_address = a.get_text(strip=True)
-                    # Parse address components
                     street_address, city, state, zip_code = parse_address_components(full_address)
                     
             if "$" in text and not price:
@@ -104,24 +104,51 @@ def parse_collection_format(soup):
                 if m:
                     price = int(m.group(0).replace("$", "").replace(",", ""))
                     
+            # More specific matching for beds
             if "BD" in text and not beds:
-                m = re.search(r"(\d+(\.\d+)?)", text)
+                m = re.search(r"(\d+(?:\.\d+)?)\s*BD", text)
                 if m:
-                    beds = float(m.group(1))
+                    beds = int(round(float(m.group(1))))
+            # More specific matching for baths
             if "BA" in text and not baths:
-                m = re.search(r"(\d+(\.\d+)?)", text)
+                m = re.search(r"(\d+(?:\.\d+)?)\s*BA", text)
                 if m:
-                    baths = float(m.group(1))
+                    baths = int(round(float(m.group(1))))
+            # More specific matching for sqft
             if "Sq.Ft." in text and not sqft:
-                m = re.search(r"([\d,]+)", text)
+                m = re.search(r"([\d,]+)\s*Sq\.Ft\.", text)
                 if m:
                     sqft = int(m.group(1).replace(",", ""))
             
-            # Try to extract MLS type if available
+            # Extract MLS number
+            if "MLS#" in text and not mls_number:
+                m = re.search(r"MLS#\s*([A-Z0-9-]+)", text)
+                if m:
+                    mls_number = m.group(1).strip()
+            
+            # Extract MLS type
             if "MLS Type:" in text and not mls_type:
                 m = re.search(r"MLS Type:\s*([^,\n]+)", text)
                 if m:
                     mls_type = m.group(1).strip()
+            
+            # Extract tax information
+            if "Taxes:" in text and not tax_information:
+                m = re.search(r"Taxes:\s*([^,\n]+)", text)
+                if m:
+                    tax_information = m.group(1).strip()
+            
+            # Extract days on compass
+            if "Days on Market:" in text and not days_on_compass:
+                m = re.search(r"Days on Market:\s*(\d+)", text)
+                if m:
+                    days_on_compass = int(m.group(1))
+            
+            # Extract last updated date
+            if "Last Updated:" in text and not last_updated:
+                m = re.search(r"Last Updated:\s*([\d/]+)", text)
+                if m:
+                    last_updated = m.group(1)
                     
         if href and full_address:
             listing = {
@@ -131,13 +158,18 @@ def parse_collection_format(soup):
                 "beds": beds,
                 "baths": baths,
                 "sqft": sqft,
+                "price_per_sqft": int(price / sqft) if price and sqft else None,
                 "city": city,
                 "state": state,
                 "zip": zip_code,
                 "estimated_rent": None,
                 "rent_yield": None,
-                "tax_information": tax_information,  # New field
-                "mls_type": mls_type  # New field
+                "tax_information": tax_information,
+                "mls_type": mls_type,
+                "mls_number": mls_number,
+                "days_on_compass": days_on_compass,
+                "last_updated": last_updated,
+                "favorite": 0
             }
             listings.append(listing)
             
@@ -153,7 +185,8 @@ def parse_individual_format(soup):
         
         price, beds, baths, sqft, full_address = None, None, None, None, None
         city, state, zip_code = None, None, None
-        tax_information, mls_type = None, None  # New fields
+        tax_information, mls_type, mls_number = None, None, None
+        days_on_compass, last_updated = None, None
         
         price_tag = row.find("b")
         if price_tag:
@@ -163,28 +196,56 @@ def parse_individual_format(soup):
                 
         for span in row.find_all("span"):
             text = span.get_text(strip=True)
+            # More specific matching for beds
             if "BD" in text and not beds:
-                m = re.search(r"(\d+(\.\d+)?)", text)
+                m = re.search(r"(\d+(?:\.\d+)?)\s*BD", text)
                 if m:
-                    beds = float(m.group(1))
+                    beds = int(round(float(m.group(1))))
+            # More specific matching for baths
             elif "BA" in text and not baths:
-                m = re.search(r"(\d+(\.\d+)?)", text)
+                m = re.search(r"(\d+(?:\.\d+)?)\s*BA", text)
                 if m:
-                    baths = float(m.group(1))
+                    baths = int(round(float(m.group(1))))
+            # More specific matching for sqft
             elif "Sq.Ft." in text and not sqft:
-                m = re.search(r"([\d,]+)", text)
+                m = re.search(r"([\d,]+)\s*Sq\.Ft\.", text)
                 if m:
                     sqft = int(m.group(1).replace(",", ""))
+            
+            # Extract MLS number
+            elif "MLS#" in text and not mls_number:
+                m = re.search(r"MLS#\s*([A-Z0-9-]+)", text)
+                if m:
+                    mls_number = m.group(1).strip()
+            
+            # Extract MLS type
             elif "MLS Type:" in text and not mls_type:
                 m = re.search(r"MLS Type:\s*([^,\n]+)", text)
                 if m:
                     mls_type = m.group(1).strip()
+            
+            # Extract tax information
+            elif "Taxes:" in text and not tax_information:
+                m = re.search(r"Taxes:\s*([^,\n]+)", text)
+                if m:
+                    tax_information = m.group(1).strip()
+            
+            # Extract days on compass
+            elif "Days on Market:" in text and not days_on_compass:
+                m = re.search(r"Days on Market:\s*(\d+)", text)
+                if m:
+                    days_on_compass = int(m.group(1))
+            
+            # Extract last updated date
+            elif "Last Updated:" in text and not last_updated:
+                m = re.search(r"Last Updated:\s*([\d/]+)", text)
+                if m:
+                    last_updated = m.group(1)
                     
         for a in row.find_all("a"):
             text = a.get_text(strip=True)
             if "," in text and len(text) > 10:
                 full_address = text
-                # Parse address components
                 street_address, city, state, zip_code = parse_address_components(full_address)
                 break
                 
@@ -196,13 +257,18 @@ def parse_individual_format(soup):
                 "beds": beds,
                 "baths": baths,
                 "sqft": sqft,
+                "price_per_sqft": int(price / sqft) if price and sqft else None,
                 "city": city,
                 "state": state,
                 "zip": zip_code,
                 "estimated_rent": None,
                 "rent_yield": None,
-                "tax_information": tax_information,  # New field
-                "mls_type": mls_type  # New field
+                "tax_information": tax_information,
+                "mls_type": mls_type,
+                "mls_number": mls_number,
+                "days_on_compass": days_on_compass,
+                "last_updated": last_updated,
+                "favorite": 0
             }
             listings.append(listing)
             

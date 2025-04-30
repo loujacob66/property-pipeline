@@ -15,8 +15,8 @@
     {
       "name": "Compass/Old Town Arvada",
       "id": "Label_863906308674991093",
-      "description": "Boulder area listings",
-      "enabled": true
+      "description": "Arvada area listings",
+      "enabled": false
     }
   ]
 }

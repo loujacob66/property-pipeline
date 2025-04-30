@@ -1,14 +1,169 @@
+#!/usr/bin/env python3
+"""
+Compass Listing Enricher
+
+This script fetches additional details for property listings from Compass.com
+and updates the database with the enriched information. Uses Playwright's
+persistent context for authentication.
+
+Usage:
+    python enrich_with_compass_details.py [--headless] [--limit LIMIT]
+
+Options:
+    --headless           Run browser in headless mode (default: False)
+    --limit LIMIT        Limit the number of listings to process (default: all)
+"""
+
+import os
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import sqlite3
 import time
-import os
+import argparse
+import json
+import traceback
+import re
 from playwright.sync_api import sync_playwright
+import random
+from pathlib import Path
+from datetime import datetime
+from lib.compass_utils import authenticate_compass, extract_listing_details
+from urllib.parse import urlparse, parse_qs
+
+# Add project root to path
+ROOT = str(Path(__file__).parent.parent)
+
+def fetch_listings_needing_enrichment(query):
+    """
+    Fetches listings from the database that need enrichment.
+    
+    Args:
+        query (str): SQL query to fetch listings
+        
+    Returns:
+        list: List of tuples containing (id, url) for listings needing enrichment
+    """
+    db_filename = os.path.join(ROOT, 'data', 'listings.db')
+    print(f"Connecting to database: {db_filename}")
+    conn = sqlite3.connect(db_filename)
+    try:
+        c = conn.cursor()
+        print(f"Executing query: {query}")
+        c.execute(query)
+        results = c.fetchall()
+        print(f"Found {len(results)} listings needing enrichment")
+        return results
+    finally:
+        conn.close()
+
+def store_listing_details(listing_id, details):
+    """
+    Stores the extracted listing details in the database.
+    
+    Args:
+        listing_id (int): The ID of the listing to update
+        details (dict): Dictionary containing the listing details
+    """
+    db_filename = os.path.join(ROOT, 'data', 'listings.db')
+    conn = sqlite3.connect(db_filename)
+    try:
+        c = conn.cursor()
+        
+        # Get existing column names from the listings table
+        c.execute("PRAGMA table_info(listings)")
+        valid_columns = {row[1] for row in c.fetchall()}
+        
+        # Filter details to only include existing columns
+        valid_fields = {k: v for k, v in details.items() if k in valid_columns and v is not None}
+        
+        if valid_fields:
+            set_clause = ", ".join(f"{key} = ?" for key in valid_fields.keys())
+            values = list(valid_fields.values()) + [listing_id]
+            
+            print(f"   Updating fields: {', '.join(valid_fields.keys())}")
+            c.execute(
+                f"UPDATE listings SET {set_clause} WHERE id = ?",
+                values
+            )
+            conn.commit()
+            
+            # Log key fields
+            if details.get("mls_number"):
+                print(f"   MLS#: {details['mls_number']}")
+            if details.get("tax_information"):
+                print(f"   Taxes: {details['tax_information']}")
+            if details.get("year_built"):
+                print(f"   Year Built: {details['year_built']}")
+    finally:
+        conn.close()
+
+def get_direct_listing_url(workspace_url):
+    """Convert a workspace URL to a direct listing URL"""
+    try:
+        # Extract the csr parameter
+        parsed_url = urlparse(workspace_url)
+        query_params = parse_qs(parsed_url.query)
+        csr = query_params.get('csr', [''])[0]
+        
+        if not csr:
+            print("⚠️ No csr parameter found in URL")
+            return None
+            
+        # Extract listing ID from csr path
+        match = re.search(r'/listing/(\d+)', csr)
+        if not match:
+            print("⚠️ Could not find listing ID in csr path")
+            return None
+            
+        listing_id = match.group(1)
+        
+        # Return the workspace URL since direct URLs are not accessible
+        return workspace_url
+        
+    except Exception as e:
+        print(f"❌ Error converting URL: {str(e)}")
+        return None
+
+def clean_mls_type(mls_type):
+    """Convert MLS type to simplified format"""
+    if mls_type == "Residential-Detached":
+        return "Detached"
+    elif mls_type == "Residential-Attached":
+        return "Attached"
+    return mls_type
+
+def fix_existing_mls_types():
+    """Fix existing MLS type values in the database"""
+    db_filename = os.path.join(os.path.dirname(__file__), '..', 'data', 'listings.db')
+    conn = sqlite3.connect(db_filename)
+    c = conn.cursor()
+    
+    # Get all listings with MLS types that need cleaning
+    c.execute("SELECT id, mls_type FROM listings WHERE mls_type LIKE 'Residential-%'")
+    listings = c.fetchall()
+    
+    if listings:
+        print(f"🔧 Found {len(listings)} listings with MLS types that need cleaning")
+        for listing_id, mls_type in listings:
+            cleaned_type = clean_mls_type(mls_type)
+            c.execute("UPDATE listings SET mls_type = ? WHERE id = ?", (cleaned_type, listing_id))
+            print(f"✅ Fixed listing ID {listing_id}: {mls_type} -> {cleaned_type}")
+        conn.commit()
+    else:
+        print("✅ No MLS types need cleaning")
+    
+    conn.close()
 
 def enrich_listings_with_compass():
+    # First fix existing MLS types
+    fix_existing_mls_types()
+    
     db_filename = os.path.join(os.path.dirname(__file__), '..', 'data', 'listings.db')
     conn = sqlite3.connect(db_filename)
     c = conn.cursor()
 
-    c.execute("SELECT id, url FROM listings WHERE mls_number IS NULL OR tax_info IS NULL OR mls_type IS NULL")
+    c.execute("SELECT id, url FROM listings WHERE mls_number IS NULL OR tax_info IS NULL OR mls_type IS NULL LIMIT 3")
     listings = c.fetchall()
 
     if not listings:
@@ -58,7 +213,8 @@ def enrich_listings_with_compass():
                 try:
                     # Wait for the MLS Type row to appear (up to 5 seconds)
                     iframe.locator("tr.keyDetails-text:has(th:has-text('MLS Type')) td").first.wait_for(timeout=5000)
-                    mls_type = iframe.locator("tr.keyDetails-text:has(th:has-text('MLS Type')) td").first.inner_text()
+                    raw_mls_type = iframe.locator("tr.keyDetails-text:has(th:has-text('MLS Type')) td").first.inner_text()
+                    mls_type = clean_mls_type(raw_mls_type)
                 except Exception:
                     print("⚠️ MLS Type not found on page.")
 
@@ -82,5 +238,16 @@ def enrich_listings_with_compass():
     conn.close()
     print("🏁 Enrichment process completed.")
 
-if __name__ == "__main__":
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--no-headless', action='store_true', help='Run in non-headless mode')
+    parser.add_argument('--max-listings', type=int, help='Maximum number of listings to process')
+    args = parser.parse_args()
+    
+    db_path = Path(__file__).parent.parent / 'data' / 'listings.db'
+    print(f"Connecting to database at {db_path}")
+    
     enrich_listings_with_compass()
+
+if __name__ == '__main__':
+    main()
