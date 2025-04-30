@@ -35,6 +35,5 @@ CREATE TABLE listings (
     agent_phone TEXT,
     agent_email TEXT,
     schools_json TEXT,
-    price_history_json TEXT,
-    tax_info TEXT
+    price_history_json TEXT
 ); 

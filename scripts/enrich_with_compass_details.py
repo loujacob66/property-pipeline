@@ -31,9 +31,6 @@ from datetime import datetime
 from lib.compass_utils import authenticate_compass, extract_listing_details
 from urllib.parse import urlparse, parse_qs
 
-# Add project root to path
-ROOT = str(Path(__file__).parent.parent)
-
 def fetch_listings_needing_enrichment(query):
     """
     Fetches listings from the database that need enrichment.
@@ -133,6 +130,19 @@ def clean_mls_type(mls_type):
         return "Attached"
     return mls_type
 
+def clean_tax_information(tax_info):
+    """Extract and format tax information as currency string."""
+    if not tax_info or tax_info == "-":
+        return None
+    # Extract the number after $ and before / or end of string
+    match = re.search(r'\$([\d,]+)', tax_info)
+    if match:
+        # Get the number and remove commas
+        amount = int(match.group(1).replace(',', ''))
+        # Format as currency string with single $
+        return "${:,}".format(amount)
+    return None
+
 def fix_existing_mls_types():
     """Fix existing MLS type values in the database"""
     db_filename = os.path.join(os.path.dirname(__file__), '..', 'data', 'listings.db')
@@ -155,7 +165,7 @@ def fix_existing_mls_types():
     
     conn.close()
 
-def enrich_listings_with_compass():
+def enrich_listings_with_compass(max_listings=None):
     # First fix existing MLS types
     fix_existing_mls_types()
     
@@ -163,7 +173,7 @@ def enrich_listings_with_compass():
     conn = sqlite3.connect(db_filename)
     c = conn.cursor()
 
-    c.execute("SELECT id, url FROM listings WHERE mls_number IS NULL OR tax_info IS NULL OR mls_type IS NULL LIMIT 3")
+    c.execute("SELECT id, url FROM listings WHERE mls_number IS NULL OR tax_information IS NULL OR mls_type IS NULL")
     listings = c.fetchall()
 
     if not listings:
@@ -171,19 +181,34 @@ def enrich_listings_with_compass():
         conn.close()
         return
 
-    print(f"🔎 Found {len(listings)} listing(s) needing enrichment.")
+    if max_listings:
+        listings = listings[:max_listings]
+        print(f"🔎 Found {len(listings)} listing(s) needing enrichment (limited to {max_listings}).")
+    else:
+        print(f"🔎 Found {len(listings)} listing(s) needing enrichment.")
 
     with sync_playwright() as p:
+        # Set up persistent context with saved authentication
+        ROOT = Path(__file__).parent.parent
+        AUTH_STORAGE_PATH = ROOT / ".auth" / "compass"
+        AUTH_STORAGE_PATH.mkdir(parents=True, exist_ok=True)
+
+        print("🌐 Launching browser with saved authentication...")
         context = p.chromium.launch_persistent_context(
-            user_data_dir=os.path.join(os.path.dirname(__file__), '..', '.auth'),
+            user_data_dir=str(AUTH_STORAGE_PATH),
             headless=False
         )
 
         page = context.pages[0]  # use the first (blank) page
-        print("🌐 Navigating to Compass login page...")
-        page.goto("https://www.compass.com/login/")
-
-        input("✅ After logging in (or if already logged in), press Enter to continue scraping...")
+        
+        # Check if we need to authenticate
+        page.goto("https://www.compass.com/")
+        if "login" in page.url:
+            print("⚠️ Not authenticated. Please log in in the browser window...")
+            page.wait_for_url("https://www.compass.com/**", timeout=0)  # Wait indefinitely for successful login
+            print("✅ Authentication successful!")
+        else:
+            print("✅ Using saved authentication")
 
         for listing_id, url in listings:
             try:
@@ -206,7 +231,8 @@ def enrich_listings_with_compass():
                 try:
                     # Wait for the Taxes row to appear (up to 5 seconds)
                     iframe.locator("tr.keyDetails-text:has(th:has-text('Taxes')) td").first.wait_for(timeout=5000)
-                    tax_info = iframe.locator("tr.keyDetails-text:has(th:has-text('Taxes')) td").first.inner_text()
+                    raw_tax_info = iframe.locator("tr.keyDetails-text:has(th:has-text('Taxes')) td").first.inner_text()
+                    tax_info = clean_tax_information(raw_tax_info)
                 except Exception:
                     print("⚠️ Tax info not found on page.")
 
@@ -222,12 +248,12 @@ def enrich_listings_with_compass():
                     c.execute('''
                         UPDATE listings
                         SET mls_number = COALESCE(?, mls_number),
-                            tax_info = COALESCE(?, tax_info),
+                            tax_information = COALESCE(?, tax_information),
                             mls_type = COALESCE(?, mls_type)
                         WHERE id = ?
                     ''', (mls_number, tax_info, mls_type, listing_id))
                     conn.commit()
-                    print(f"✅ Updated listing ID {listing_id}: MLS#={mls_number}, Tax={tax_info}, MLS Type={mls_type}")
+                    print(f"✅ Updated listing ID {listing_id}: MLS#={mls_number}, Tax=${tax_info}, MLS Type={mls_type}")
                 else:
                     print(f"⚠️ No updates found for listing ID {listing_id}")
 
@@ -240,14 +266,10 @@ def enrich_listings_with_compass():
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--no-headless', action='store_true', help='Run in non-headless mode')
     parser.add_argument('--max-listings', type=int, help='Maximum number of listings to process')
     args = parser.parse_args()
     
-    db_path = Path(__file__).parent.parent / 'data' / 'listings.db'
-    print(f"Connecting to database at {db_path}")
-    
-    enrich_listings_with_compass()
+    enrich_listings_with_compass(max_listings=args.max_listings)
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
