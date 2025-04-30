@@ -13,7 +13,7 @@ def init_db():
     c.execute('''
         CREATE TABLE IF NOT EXISTS listings (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            address TEXT NOT NULL,
+            address TEXT NOT NULL UNIQUE,
             city TEXT,
             state TEXT,
             zip TEXT,

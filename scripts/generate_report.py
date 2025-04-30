@@ -1,14 +1,24 @@
+#!/usr/bin/env python3
+"""
+Generate a report of all listings in the database
+"""
+
 import sqlite3
+from pathlib import Path
+
+# Constants
+ROOT = Path(__file__).parent.parent
+DB_PATH = ROOT / "data" / "listings.db"
 
 def generate_report():
-    db_filename = 'data/listings.db'
-    conn = sqlite3.connect(db_filename)
+    """Generate a report of all listings"""
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
 
     c.execute('''
         SELECT address, city, price, beds, baths, sqft, price_per_sqft, 
                estimated_rent, rent_yield, mls_number, mls_type, tax_information,
-               days_on_compass, last_updated, favorite
+               days_on_compass, status, last_updated, favorite
         FROM listings
         ORDER BY imported_at DESC
     ''')
@@ -23,7 +33,7 @@ def generate_report():
     headers = [
         "Address", "City", "Price", "Beds", "Baths", "Sqft",
         "Price/Sqft", "Est. Rent", "Yield", "MLS#", "MLS Type", "Tax Info",
-        "Days on Compass", "Last Updated", "Favorite"
+        "Days on Comp", "Status", "Updated", "Fav"
     ]
 
     # Calculate column widths
@@ -35,7 +45,7 @@ def generate_report():
             elif isinstance(value, float):
                 value = f"{value:,.2f}" if idx not in [8] else f"{value:.2%}"  # Special formatting for rent_yield
             elif isinstance(value, int):
-                if idx == 14:  # Favorite field
+                if idx == 15:  # Favorite field
                     value = "★" if value else ""
                 else:
                     value = f"{value:,}"
@@ -57,7 +67,7 @@ def generate_report():
             elif isinstance(value, float):
                 value = f"{value:,.2f}" if idx not in [8] else f"{value:.2%}"  # Special formatting for rent_yield
             elif isinstance(value, int):
-                if idx == 14:  # Favorite field
+                if idx == 15:  # Favorite field
                     value = "★" if value else ""
                 else:
                     value = f"{value:,}"

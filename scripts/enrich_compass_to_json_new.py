@@ -7,12 +7,14 @@ and saves the enriched information to a JSON file for review before database upd
 Uses Playwright's persistent context for authentication.
 
 Usage:
-    python enrich_compass_to_json_new.py [--headless] [--limit LIMIT] [--output OUTPUT]
+    python enrich_compass_to_json_new.py [--headless] [--limit LIMIT] [--output OUTPUT] [--update-db] [--address ADDRESS]
 
 Options:
     --headless           Run browser in headless mode (default: False)
     --limit LIMIT        Limit the number of listings to process (default: all)
     --output OUTPUT      Output JSON file (default: enriched_listings_{timestamp}.json)
+    --update-db          Update the database with enriched data (default: False)
+    --address ADDRESS    Process a specific address
 """
 
 import os
@@ -41,26 +43,37 @@ def setup_directories():
     AUTH_STORAGE_PATH.mkdir(parents=True, exist_ok=True)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-def fetch_listings_needing_enrichment(max_listings=None):
+def fetch_listings_needing_enrichment(max_listings=None, specific_address=None):
     """Fetch listings that need enrichment"""
     print(f"Connecting to database: {DB_PATH}")
     conn = sqlite3.connect(DB_PATH)
     try:
         c = conn.cursor()
         
-        # Query for listings missing any of our target fields
-        query = """
-            SELECT id, url, address, price, city, state, zip 
-            FROM listings 
-            WHERE days_on_compass IS NULL 
-               OR favorite IS NULL 
-               OR last_updated IS NULL
-        """
-        if max_listings:
-            query += f" LIMIT {max_listings}"
+        if specific_address:
+            # Query for a specific address
+            query = """
+                SELECT id, url, address, price, city, state, zip, sqft 
+                FROM listings 
+                WHERE address = ?
+            """
+            print(f"Executing query for specific address: {specific_address}")
+            c.execute(query, (specific_address,))
+        else:
+            # Query for listings missing any of our target fields
+            query = """
+                SELECT id, url, address, price, city, state, zip, sqft 
+                FROM listings 
+                WHERE days_on_compass IS NULL 
+                   OR favorite IS NULL 
+                   OR last_updated IS NULL
+            """
+            if max_listings:
+                query += f" LIMIT {max_listings}"
+                
+            print(f"Executing query: {query}")
+            c.execute(query)
             
-        print(f"Executing query: {query}")
-        c.execute(query)
         results = c.fetchall()
         
         # Convert to list of dictionaries
@@ -122,6 +135,35 @@ def clean_tax_information(tax_info):
     
     return None
 
+def clean_mls_type(mls_type):
+    """Clean MLS type to be either 'Attached' or 'Detached'"""
+    if not mls_type or mls_type == "-":
+        return None
+        
+    # Remove 'Residential-' prefix if present
+    mls_type = mls_type.replace("Residential-", "")
+    
+    # Convert to proper format
+    if "Attached" in mls_type:
+        return "Attached"
+    elif "Detached" in mls_type:
+        return "Detached"
+    elif mls_type == "Residential":
+        return "Detached"  # Default to Detached if just "Residential"
+    else:
+        return None
+
+def clean_price_per_sqft(price_per_sqft):
+    """Clean price per square foot value"""
+    if not price_per_sqft or price_per_sqft == "-":
+        return None
+        
+    # Extract numeric value and remove $ and commas
+    match = re.search(r'\$?([\d,]+)', price_per_sqft)
+    if match:
+        return int(match.group(1).replace(',', ''))
+    return None
+
 def extract_listing_details(page, listing_id):
     """Extract listing details from the page"""
     details = {}
@@ -135,6 +177,26 @@ def extract_listing_details(page, listing_id):
         # Wait for the iframe containing listing details
         iframe = page.frame_locator("iframe[title='Listing page']").first
         
+        # Extract MLS Number (from iframe)
+        try:
+            mls_number_text = iframe.locator("tr:has(th:has-text('MLS #')) td").first.inner_text()
+            if mls_number_text and mls_number_text != "-":
+                details['mls_number'] = mls_number_text
+                print(f"Found MLS #: {mls_number_text}")
+        except Exception:
+            print("⚠️ MLS # not found")
+        
+        # Extract MLS Type (from iframe)
+        try:
+            mls_type_text = iframe.locator("tr:has(th:has-text('MLS Type')) td").first.inner_text()
+            if mls_type_text and mls_type_text != "-":
+                cleaned_type = clean_mls_type(mls_type_text)
+                if cleaned_type:
+                    details['mls_type'] = cleaned_type
+                    print(f"Found MLS Type: {mls_type_text} (cleaned to: {cleaned_type})")
+        except Exception:
+            print("⚠️ MLS Type not found")
+        
         # Extract days on compass (from iframe)
         try:
             days_text = iframe.locator("tr:has(th:has-text('Days on Compass')) td").first.inner_text()
@@ -146,30 +208,87 @@ def extract_listing_details(page, listing_id):
         
         # Extract favorite status (try both iframe and main page)
         try:
-            # Try iframe first
-            favorite_button = iframe.locator("button[aria-label*='favorite'], button[class*='favorite']").first
-            if not favorite_button or favorite_button.count() == 0:
-                # Try main page
-                favorite_button = page.locator("button[aria-label*='favorite'], button[class*='favorite']").first
+            # Wait for any favorite-related elements to be loaded
+            page.wait_for_selector("button[class*='favorite'], [class*='saved'], [aria-label*='favorite']", timeout=10000)
             
-            if favorite_button and favorite_button.count() > 0:
-                # Get class attribute
-                class_attr = favorite_button.get_attribute("class") or ""
-                aria_pressed = favorite_button.get_attribute("aria-pressed")
-                button_text = favorite_button.inner_text().strip()
-                
-                is_favorite = (
-                    "favorited" in class_attr or
-                    "active" in class_attr or
-                    aria_pressed == "true" or
-                    button_text == "Saved"
-                )
-                details['favorite'] = is_favorite
-                print(f"Found favorite button - class: {class_attr}, aria-pressed: {aria_pressed}, text: {button_text}")
-            else:
-                print("⚠️ Favorite button not found")
+            # First check for property-specific favorite button
+            favorite_button_selectors = [
+                "button[class*='footer-favoriteBtn']",
+                "button[class*='favorite'][class*='circle']",
+                "button[class*='favorite'][class*='heart']",
+                "button[aria-label*='favorite'][class*='circle']",
+                "button[aria-label*='favorite'][class*='heart']"
+            ]
+            
+            is_favorite = False
+            
+            # Try main page first
+            for selector in favorite_button_selectors:
+                try:
+                    element = page.locator(selector).first
+                    if element and element.count() > 0:
+                        # Get all possible attributes
+                        class_attr = element.get_attribute("class") or ""
+                        aria_label = element.get_attribute("aria-label") or ""
+                        data_testid = element.get_attribute("data-testid") or ""
+                        text = element.inner_text().strip()
+                        
+                        print(f"Found favorite button in main page - selector: {selector}")
+                        print(f"Attributes - class: {class_attr}, aria-label: {aria_label}, data-testid: {data_testid}, text: {text}")
+                        
+                        # Check various indicators
+                        if any([
+                            "saved" in text.lower(),
+                            "saved" in class_attr.lower(),
+                            "saved" in aria_label.lower(),
+                            "saved" in data_testid.lower(),
+                            "favorited" in class_attr.lower(),
+                            "remove from favorites" in aria_label.lower(),
+                            "active" in class_attr.lower()
+                        ]):
+                            is_favorite = True
+                            print(f"Found saved state in main page with selector: {selector}")
+                            break
+                except Exception as e:
+                    print(f"Error checking selector {selector} in main page: {str(e)}")
+            
+            # If not found in main page, try iframe
+            if not is_favorite:
+                for selector in favorite_button_selectors:
+                    try:
+                        element = iframe.locator(selector).first
+                        if element and element.count() > 0:
+                            # Get all possible attributes
+                            class_attr = element.get_attribute("class") or ""
+                            aria_label = element.get_attribute("aria-label") or ""
+                            data_testid = element.get_attribute("data-testid") or ""
+                            text = element.inner_text().strip()
+                            
+                            print(f"Found favorite button in iframe - selector: {selector}")
+                            print(f"Attributes - class: {class_attr}, aria-label: {aria_label}, data-testid: {data_testid}, text: {text}")
+                            
+                            # Check various indicators
+                            if any([
+                                "saved" in text.lower(),
+                                "saved" in class_attr.lower(),
+                                "saved" in aria_label.lower(),
+                                "saved" in data_testid.lower(),
+                                "favorited" in class_attr.lower(),
+                                "remove from favorites" in aria_label.lower(),
+                                "active" in class_attr.lower()
+                            ]):
+                                is_favorite = True
+                                print(f"Found saved state in iframe with selector: {selector}")
+                                break
+                    except Exception as e:
+                        print(f"Error checking selector {selector} in iframe: {str(e)}")
+            
+            details['favorite'] = is_favorite
+            print(f"Final favorite status determined: {is_favorite}")
+            
         except Exception as e:
             print(f"⚠️ Error getting favorite status: {str(e)}")
+            traceback.print_exc()
         
         # Extract last updated date (try both iframe and main page)
         try:
@@ -300,19 +419,126 @@ def extract_listing_details(page, listing_id):
             print(f"⚠️ Error getting tax information: {str(e)}")
             traceback.print_exc()
             
+        # Extract price per square foot (from iframe)
+        try:
+            # Try different selectors for price per square foot
+            price_per_sqft_selectors = [
+                "tr:has(th:has-text('Price per Sq Ft')) td",
+                "tr:has(th:has-text('Price/Sq Ft')) td",
+                "tr:has(th:has-text('Price per Square Foot')) td",
+                "tr:has(th:has-text('$/Sq Ft')) td",
+                "div:has-text('Price per Sq Ft')",
+                "div:has-text('Price/Sq Ft')",
+                "div:has-text('Price per Square Foot')",
+                "div:has-text('$/Sq Ft')"
+            ]
+            
+            price_per_sqft_text = None
+            for selector in price_per_sqft_selectors:
+                try:
+                    element = iframe.locator(selector).first
+                    if element and element.count() > 0:
+                        price_per_sqft_text = element.inner_text()
+                        print(f"Found price per sq ft with selector: {selector}")
+                        break
+                except Exception:
+                    continue
+            
+            if price_per_sqft_text and price_per_sqft_text != "-":
+                cleaned_price_per_sqft = clean_price_per_sqft(price_per_sqft_text)
+                if cleaned_price_per_sqft:
+                    details['price_per_sqft'] = cleaned_price_per_sqft
+                    print(f"Found Price per Sq Ft: {price_per_sqft_text} (cleaned to: {cleaned_price_per_sqft})")
+            else:
+                print("⚠️ Price per Sq Ft not found with any selector")
+        except Exception as e:
+            print(f"⚠️ Error getting price per sq ft: {str(e)}")
+            traceback.print_exc()
+            
     except Exception as e:
         print(f"❌ Error extracting details: {str(e)}")
         traceback.print_exc()
     
     return details
 
-def enrich_listings_with_compass(output_file=None, max_listings=None, headless=False):
-    """Main function to enrich listings and save to JSON"""
+def calculate_price_per_sqft(price, sqft):
+    """Calculate price per square foot from price and square feet"""
+    if not price or not sqft or price <= 0 or sqft <= 0:
+        return None
+    return int(price / sqft)
+
+def update_database(enriched_data):
+    """Update the database with enriched data"""
+    print("Updating database with enriched data...")
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        c = conn.cursor()
+        
+        # Get current table structure
+        c.execute("PRAGMA table_info(listings)")
+        columns = c.fetchall()
+        column_names = [col[1] for col in columns]
+        
+        updated_count = 0
+        skipped_count = 0
+        
+        for listing in enriched_data:
+            listing_id = listing.get('id')
+            if not listing_id:
+                print("⚠️ Skipping entry without ID")
+                skipped_count += 1
+                continue
+            
+            # Skip entries with errors
+            if 'error' in listing:
+                print(f"⚠️ Skipping listing ID {listing_id} due to error during scraping")
+                skipped_count += 1
+                continue
+            
+            # Calculate price per square foot if we have both price and sqft
+            price = listing.get('price')
+            sqft = listing.get('sqft')
+            if price and sqft:
+                listing['price_per_sqft'] = calculate_price_per_sqft(price, sqft)
+                if listing['price_per_sqft']:
+                    print(f"Calculated price per sqft: ${listing['price_per_sqft']}/sqft")
+            
+            # Extract fields that exist in the database and have values
+            valid_fields = {k: v for k, v in listing.items() 
+                          if k in column_names and v is not None}
+            
+            if valid_fields:
+                # Build the update query
+                set_clause = ", ".join(f"{key} = ?" for key in valid_fields.keys())
+                values = list(valid_fields.values()) + [listing_id]
+                
+                print(f"✏️ Updating listing ID {listing_id} with fields: {', '.join(valid_fields.keys())}")
+                c.execute(
+                    f"UPDATE listings SET {set_clause} WHERE id = ?",
+                    values
+                )
+                updated_count += 1
+            else:
+                print(f"⚠️ No valid fields to update for listing ID {listing_id}")
+                skipped_count += 1
+        
+        conn.commit()
+        print(f"🏁 Database update completed: {updated_count} listings updated, {skipped_count} skipped")
+        
+    except Exception as e:
+        print(f"❌ Error updating database: {str(e)}")
+        conn.rollback()
+        
+    finally:
+        conn.close()
+
+def enrich_listings_with_compass(output_file=None, max_listings=None, headless=False, update_db=False, specific_address=None):
+    """Main function to enrich listings and optionally update database"""
     # Ensure directories exist
     setup_directories()
     
     # Fetch listings needing enrichment
-    listings = fetch_listings_needing_enrichment(max_listings)
+    listings = fetch_listings_needing_enrichment(max_listings, specific_address)
     if not listings:
         print("✅ No listings need enrichment. Database is up to date.")
         return
@@ -393,8 +619,21 @@ def enrich_listings_with_compass(output_file=None, max_listings=None, headless=F
     # Save enriched data to JSON file
     with open(output_file, 'w') as f:
         json.dump(enriched_data, f, indent=2)
+        f.flush()
+    
+    # Validate the JSON file
+    try:
+        with open(output_file, 'r') as f:
+            json.load(f)
+        print(f"✅ Successfully wrote valid JSON to {output_file}")
+    except json.JSONDecodeError as e:
+        print(f"⚠️ Warning: Written JSON file may not be valid: {e}")
     
     print(f"🏁 Enrichment process completed. Saved {len(enriched_data)} listings to {output_file}")
+    
+    # Update database if requested
+    if update_db:
+        update_database(enriched_data)
     
     # Print summary
     error_count = sum(1 for item in enriched_data if 'error' in item)
@@ -406,13 +645,17 @@ def main():
     parser.add_argument('--headless', action='store_true', help='Run browser in headless mode')
     parser.add_argument('--limit', type=int, help='Maximum number of listings to process')
     parser.add_argument('--output', help='Output JSON file path')
+    parser.add_argument('--update-db', action='store_true', help='Update database with enriched data')
+    parser.add_argument('--address', help='Process a specific address')
     
     args = parser.parse_args()
     
     enrich_listings_with_compass(
         output_file=args.output,
         max_listings=args.limit,
-        headless=args.headless
+        headless=args.headless,
+        update_db=args.update_db,
+        specific_address=args.address
     )
 
 if __name__ == "__main__":
