@@ -64,9 +64,13 @@ def fetch_listings_needing_enrichment(max_listings=None, specific_address=None):
             query = """
                 SELECT id, url, address, price, city, state, zip, sqft 
                 FROM listings 
-                WHERE days_on_compass IS NULL 
+                WHERE mls_number IS NULL 
+                   OR mls_type IS NULL 
+                   OR tax_information IS NULL
+                   OR days_on_compass IS NULL 
                    OR favorite IS NULL 
                    OR last_updated IS NULL
+                   OR status IS NULL
             """
             if max_listings:
                 query += f" LIMIT {max_listings}"
@@ -417,42 +421,6 @@ def extract_listing_details(page, listing_id):
                 print("⚠️ Tax information not found with any selector")
         except Exception as e:
             print(f"⚠️ Error getting tax information: {str(e)}")
-            traceback.print_exc()
-            
-        # Extract price per square foot (from iframe)
-        try:
-            # Try different selectors for price per square foot
-            price_per_sqft_selectors = [
-                "tr:has(th:has-text('Price per Sq Ft')) td",
-                "tr:has(th:has-text('Price/Sq Ft')) td",
-                "tr:has(th:has-text('Price per Square Foot')) td",
-                "tr:has(th:has-text('$/Sq Ft')) td",
-                "div:has-text('Price per Sq Ft')",
-                "div:has-text('Price/Sq Ft')",
-                "div:has-text('Price per Square Foot')",
-                "div:has-text('$/Sq Ft')"
-            ]
-            
-            price_per_sqft_text = None
-            for selector in price_per_sqft_selectors:
-                try:
-                    element = iframe.locator(selector).first
-                    if element and element.count() > 0:
-                        price_per_sqft_text = element.inner_text()
-                        print(f"Found price per sq ft with selector: {selector}")
-                        break
-                except Exception:
-                    continue
-            
-            if price_per_sqft_text and price_per_sqft_text != "-":
-                cleaned_price_per_sqft = clean_price_per_sqft(price_per_sqft_text)
-                if cleaned_price_per_sqft:
-                    details['price_per_sqft'] = cleaned_price_per_sqft
-                    print(f"Found Price per Sq Ft: {price_per_sqft_text} (cleaned to: {cleaned_price_per_sqft})")
-            else:
-                print("⚠️ Price per Sq Ft not found with any selector")
-        except Exception as e:
-            print(f"⚠️ Error getting price per sq ft: {str(e)}")
             traceback.print_exc()
             
     except Exception as e:
