@@ -58,7 +58,12 @@ def migrate_database():
                 days_on_compass INTEGER,
                 last_updated DATE,
                 favorite INTEGER DEFAULT 0,
-                status TEXT
+                status TEXT,
+                walk_score INTEGER,
+                transit_score INTEGER,
+                bike_score INTEGER,
+                walkscore_shorturl TEXT,
+                compass_shorturl TEXT
             )
         '''
         c.execute(create_table_sql)
@@ -82,6 +87,23 @@ def migrate_database():
         print("\nReplacing old table with new table...")
         c.execute("DROP TABLE listings")
         c.execute("ALTER TABLE listings_new RENAME TO listings")
+        
+        # Add new fields if they don't exist
+        c.execute("PRAGMA table_info(listings)")
+        columns = [col[1] for col in c.fetchall()]
+        
+        new_fields = {
+            'walk_score': 'INTEGER',
+            'transit_score': 'INTEGER',
+            'bike_score': 'INTEGER',
+            'walkscore_shorturl': 'TEXT',
+            'compass_shorturl': 'TEXT'
+        }
+        
+        for field, field_type in new_fields.items():
+            if field not in columns:
+                print(f"Adding {field} column...")
+                c.execute(f"ALTER TABLE listings ADD COLUMN {field} {field_type}")
         
         conn.commit()
         print("\n✅ Migration completed successfully")

@@ -518,12 +518,17 @@ def update_database(enriched_data):
             valid_fields = {k: v for k, v in listing.items() 
                           if k in column_names and v is not None}
             
+            # Add new fields if they exist
+            if 'walkscore_shorturl' in listing and 'walkscore_shorturl' in column_names:
+                valid_fields['walkscore_shorturl'] = listing['walkscore_shorturl']
+            if 'compass_shorturl' in listing and 'compass_shorturl' in column_names:
+                valid_fields['compass_shorturl'] = listing['compass_shorturl']
+            
             if valid_fields:
-                # Build the update query
                 set_clause = ", ".join(f"{key} = ?" for key in valid_fields.keys())
                 values = list(valid_fields.values()) + [listing_id]
                 
-                print(f"✏️ Updating listing ID {listing_id} with fields: {', '.join(valid_fields.keys())}")
+                print(f"   Updating fields: {', '.join(valid_fields.keys())}")
                 c.execute(
                     f"UPDATE listings SET {set_clause} WHERE id = ?",
                     values
@@ -534,7 +539,9 @@ def update_database(enriched_data):
                 skipped_count += 1
         
         conn.commit()
-        print(f"🏁 Database update completed: {updated_count} listings updated, {skipped_count} skipped")
+        print(f"\n✅ Database update complete:")
+        print(f"   Updated: {updated_count} listings")
+        print(f"   Skipped: {skipped_count} listings")
         
     except Exception as e:
         print(f"❌ Error updating database: {str(e)}")

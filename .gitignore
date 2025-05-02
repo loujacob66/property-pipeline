@@ -5,7 +5,7 @@ __pycache__/
 # Virtual environment
 .venv/
 
-# Local creds + auth
+config/
 credentials.json
 token.pickle
 
@@ -17,5 +17,9 @@ logs/
 # macOS metadata
 .DS_Store
 
+#misc
+*.log
 *.zip
 .auth/
+
+

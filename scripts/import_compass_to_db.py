@@ -23,31 +23,62 @@ def import_listing_to_db(listing):
         if existing:
             # Update existing listing
             print(f"Updating existing listing: {listing['address']}")
-            c.execute('''
+            update_fields = {
+                'price': listing['price'],
+                'beds': listing['beds'],
+                'baths': listing['baths'],
+                'sqft': listing['sqft'],
+                'price_per_sqft': listing['price_per_sqft'],
+                'url': listing['url'],
+                'source': listing['source'],
+                'imported_at': 'CURRENT_TIMESTAMP'
+            }
+            
+            # Add new fields if they exist
+            if 'walkscore_shorturl' in listing:
+                update_fields['walkscore_shorturl'] = listing['walkscore_shorturl']
+            if 'compass_shorturl' in listing:
+                update_fields['compass_shorturl'] = listing['compass_shorturl']
+            
+            set_clause = ", ".join(f"{key} = ?" for key in update_fields.keys())
+            values = list(update_fields.values()) + [listing['address']]
+            
+            c.execute(f'''
                 UPDATE listings 
-                SET price = ?, beds = ?, baths = ?, sqft = ?, 
-                    price_per_sqft = ?, url = ?, source = ?,
-                    imported_at = CURRENT_TIMESTAMP
+                SET {set_clause}
                 WHERE address = ?
-            ''', (
-                listing['price'], listing['beds'], listing['baths'],
-                listing['sqft'], listing['price_per_sqft'], listing['url'],
-                listing['source'], listing['address']
-            ))
+            ''', values)
         else:
             # Insert new listing
             print(f"Inserting new listing: {listing['address']}")
-            c.execute('''
-                INSERT INTO listings (
-                    address, city, state, zip, price, beds, baths,
-                    sqft, price_per_sqft, url, source
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                listing['address'], listing['city'], listing['state'],
-                listing['zip'], listing['price'], listing['beds'],
-                listing['baths'], listing['sqft'], listing['price_per_sqft'],
-                listing['url'], listing['source']
-            ))
+            insert_fields = {
+                'address': listing['address'],
+                'city': listing['city'],
+                'state': listing['state'],
+                'zip': listing['zip'],
+                'price': listing['price'],
+                'beds': listing['beds'],
+                'baths': listing['baths'],
+                'sqft': listing['sqft'],
+                'price_per_sqft': listing['price_per_sqft'],
+                'url': listing['url'],
+                'source': listing['source']
+            }
+            
+            # Add new fields if they exist
+            if 'walkscore_shorturl' in listing:
+                insert_fields['walkscore_shorturl'] = listing['walkscore_shorturl']
+            if 'compass_shorturl' in listing:
+                insert_fields['compass_shorturl'] = listing['compass_shorturl']
+            
+            columns = ", ".join(insert_fields.keys())
+            placeholders = ", ".join(["?"] * len(insert_fields))
+            values = list(insert_fields.values())
+            
+            c.execute(f'''
+                INSERT INTO listings ({columns})
+                VALUES ({placeholders})
+            ''', values)
         
         conn.commit()
         return True

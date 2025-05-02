@@ -33,7 +33,13 @@ def init_db():
             tax_information TEXT,
             days_on_compass INTEGER,
             last_updated DATE,
-            favorite INTEGER DEFAULT 0
+            favorite INTEGER DEFAULT 0,
+            status TEXT,
+            walk_score INTEGER,
+            transit_score INTEGER,
+            bike_score INTEGER,
+            walkscore_shorturl TEXT,
+            compass_shorturl TEXT
         )
     ''')
     conn.commit()
