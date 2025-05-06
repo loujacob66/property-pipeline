@@ -15,8 +15,8 @@ Options:
 """
 
 import os
-import sys
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# import sys # No longer needed for sys.path manipulation here
+# sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) # Redundant path manipulation
 
 import sqlite3
 import time
@@ -28,8 +28,13 @@ from playwright.sync_api import sync_playwright
 import random
 from pathlib import Path
 from datetime import datetime
-from lib.compass_utils import authenticate_compass, extract_listing_details
+# from lib.compass_utils import authenticate_compass, extract_listing_details # Not used, assuming logic is inline or different
 from urllib.parse import urlparse, parse_qs
+
+# Define project root and database path
+ROOT = Path(__file__).resolve().parent.parent
+DB_PATH = ROOT / 'data' / 'listings.db'
+AUTH_STORAGE_PATH = ROOT / ".auth" / "compass"
 
 def fetch_listings_needing_enrichment(query):
     """
@@ -41,9 +46,9 @@ def fetch_listings_needing_enrichment(query):
     Returns:
         list: List of tuples containing (id, url) for listings needing enrichment
     """
-    db_filename = os.path.join(ROOT, 'data', 'listings.db')
-    print(f"Connecting to database: {db_filename}")
-    conn = sqlite3.connect(db_filename)
+    # db_filename = os.path.join(ROOT, 'data', 'listings.db') # Use global DB_PATH
+    print(f"Connecting to database: {DB_PATH}")
+    conn = sqlite3.connect(DB_PATH)
     try:
         c = conn.cursor()
         print(f"Executing query: {query}")
@@ -62,8 +67,8 @@ def store_listing_details(listing_id, details):
         listing_id (int): The ID of the listing to update
         details (dict): Dictionary containing the listing details
     """
-    db_filename = os.path.join(ROOT, 'data', 'listings.db')
-    conn = sqlite3.connect(db_filename)
+    # db_filename = os.path.join(ROOT, 'data', 'listings.db') # Use global DB_PATH
+    conn = sqlite3.connect(DB_PATH)
     try:
         c = conn.cursor()
         
@@ -145,8 +150,8 @@ def clean_tax_information(tax_info):
 
 def fix_existing_mls_types():
     """Fix existing MLS type values in the database"""
-    db_filename = os.path.join(os.path.dirname(__file__), '..', 'data', 'listings.db')
-    conn = sqlite3.connect(db_filename)
+    # db_filename = os.path.join(os.path.dirname(__file__), '..', 'data', 'listings.db') # Use global DB_PATH
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     
     # Get all listings with MLS types that need cleaning
@@ -169,8 +174,8 @@ def enrich_listings_with_compass(max_listings=None):
     # First fix existing MLS types
     fix_existing_mls_types()
     
-    db_filename = os.path.join(os.path.dirname(__file__), '..', 'data', 'listings.db')
-    conn = sqlite3.connect(db_filename)
+    # db_filename = os.path.join(os.path.dirname(__file__), '..', 'data', 'listings.db') # Use global DB_PATH
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
 
     c.execute("SELECT id, url FROM listings WHERE mls_number IS NULL OR tax_information IS NULL OR mls_type IS NULL")
@@ -189,8 +194,8 @@ def enrich_listings_with_compass(max_listings=None):
 
     with sync_playwright() as p:
         # Set up persistent context with saved authentication
-        ROOT = Path(__file__).parent.parent
-        AUTH_STORAGE_PATH = ROOT / ".auth" / "compass"
+        # ROOT = Path(__file__).parent.parent # Defined globally
+        # AUTH_STORAGE_PATH = ROOT / ".auth" / "compass" # Defined globally
         AUTH_STORAGE_PATH.mkdir(parents=True, exist_ok=True)
 
         print("🌐 Launching browser with saved authentication...")

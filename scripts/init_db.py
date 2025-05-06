@@ -1,14 +1,18 @@
 import sqlite3
 import os
+from pathlib import Path
 
 def init_db():
-    db_folder = 'data'
-    db_filename = os.path.join(db_folder, 'listings.db')
+    # Define path relative to this script file
+    script_dir = Path(__file__).resolve().parent
+    root_dir = script_dir.parent
+    db_path = root_dir / 'data' / 'listings.db'
 
-    os.makedirs(db_folder, exist_ok=True)  # Ensure 'data/' folder exists
+    # Ensure the 'data/' directory exists
+    db_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Connect and create table first
-    conn = sqlite3.connect(db_filename)
+    conn = sqlite3.connect(db_path)
     c = conn.cursor()
     c.execute('''
         CREATE TABLE IF NOT EXISTS listings (
@@ -46,8 +50,8 @@ def init_db():
     conn.close()
 
     # AFTER connection and table creation, check if file now exists
-    if os.path.isfile(db_filename):
-        print(f"✅ Database created successfully: {db_filename}")
+    if db_path.is_file():
+        print(f"✅ Database created successfully: {db_path}")
     else:
         print(f"❌ Error: database was not created.")
 

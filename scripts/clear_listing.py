@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+# !/usr/bin/env python3
 """
 Script to clear a specific listing from the database.
 This will allow the listing to be re-imported from Gmail if the email still exists.

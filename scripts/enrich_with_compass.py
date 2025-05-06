@@ -18,8 +18,8 @@ Options:
 """
 
 import os
-import sys
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# import sys # No longer needed for sys.path manipulation here
+# sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) # Redundant path manipulation
 
 import sqlite3
 import time
@@ -154,6 +154,38 @@ def clean_tax_information(tax_info):
         return "${:,}".format(amount)
     
     return None
+
+def track_changes(conn, listing_id, new_values, source):
+    """Track changes to listing fields in the listing_changes table."""
+    try:
+        c = conn.cursor()
+        
+        # Get current values from database
+        c.execute("SELECT * FROM listings WHERE id = ?", (listing_id,))
+        current_values = dict(zip([column[0] for column in c.description], c.fetchone()))
+        
+        # Track changes for each field
+        for field, new_value in new_values.items():
+            old_value = current_values.get(field)
+            
+            # Skip if values are the same
+            if old_value == new_value:
+                continue
+                
+            # Convert values to strings for comparison
+            old_str = str(old_value) if old_value is not None else None
+            new_str = str(new_value) if new_value is not None else None
+            
+            # Insert change record
+            c.execute("""
+                INSERT INTO listing_changes 
+                (listing_id, field_name, old_value, new_value, source)
+                VALUES (?, ?, ?, ?, ?)
+            """, (listing_id, field, old_str, new_str, source))
+            
+    except Exception as e:
+        print(f"⚠️ Error tracking changes: {str(e)}")
+        traceback.print_exc()
 
 def clean_mls_type(mls_type):
     """Clean MLS type to be either 'Attached' or 'Detached'"""
@@ -492,6 +524,7 @@ def update_database(enriched_data):
         
         updated_count = 0
         skipped_count = 0
+        changes_count = 0
         
         for listing in enriched_data:
             listing_id = listing.get('id')
@@ -525,15 +558,27 @@ def update_database(enriched_data):
                 valid_fields['compass_shorturl'] = listing['compass_shorturl']
             
             if valid_fields:
+                # Track changes before updating
+                track_changes(conn, listing_id, valid_fields, "compass-enricher")
+                
+                # Update the listing
                 set_clause = ", ".join(f"{key} = ?" for key in valid_fields.keys())
                 values = list(valid_fields.values()) + [listing_id]
                 
                 print(f"   Updating fields: {', '.join(valid_fields.keys())}")
                 c.execute(
-                    f"UPDATE listings SET {set_clause} WHERE id = ?",
+                    f"UPDATE listings SET {set_clause}, last_updated = CURRENT_TIMESTAMP WHERE id = ?",
                     values
                 )
                 updated_count += 1
+                
+                # Count changes
+                c.execute("""
+                    SELECT COUNT(*) FROM listing_changes 
+                    WHERE listing_id = ? AND source = 'compass-enricher'
+                    AND changed_at >= datetime('now', '-1 minute')
+                """, (listing_id,))
+                changes_count += c.fetchone()[0]
             else:
                 print(f"⚠️ No valid fields to update for listing ID {listing_id}")
                 skipped_count += 1
@@ -542,6 +587,7 @@ def update_database(enriched_data):
         print(f"\n✅ Database update complete:")
         print(f"   Updated: {updated_count} listings")
         print(f"   Skipped: {skipped_count} listings")
+        print(f"   Changes tracked: {changes_count} fields")
         
     except Exception as e:
         print(f"❌ Error updating database: {str(e)}")

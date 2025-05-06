@@ -13,16 +13,18 @@ import sqlite3
 import os
 import shutil
 from datetime import datetime
+from pathlib import Path
 
-# Paths
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA_DIR = os.path.join(PROJECT_ROOT, "data")
-DB_PATH = os.path.join(DATA_DIR, "listings.db")
-BACKUP_PATH = os.path.join(DATA_DIR, f"listings_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db")
+# Paths defined using pathlib relative to script location
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPT_DIR.parent
+DATA_DIR = PROJECT_ROOT / "data"
+DB_PATH = DATA_DIR / "listings.db"
+BACKUP_PATH = DATA_DIR / f"listings_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
 
 def backup_database():
     """Create a backup of the current database."""
-    if os.path.exists(DB_PATH):
+    if DB_PATH.exists():
         shutil.copy2(DB_PATH, BACKUP_PATH)
         print(f"✅ Created backup at {BACKUP_PATH}")
     else:
@@ -97,7 +99,7 @@ def recreate_database():
         backup_database()
         
         # Create a temporary path for the new database
-        temp_db_path = DB_PATH + ".new"
+        temp_db_path = DB_PATH.with_suffix(".new")
         
         # Create the new database
         conn = sqlite3.connect(temp_db_path)
@@ -105,7 +107,7 @@ def recreate_database():
         
         # Create listings table with all columns
         cursor.execute('''
-        CREATE TABLE IF NOT EXISTS listings (
+        CREATE TABLE listings (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             address TEXT,
             city TEXT,
@@ -135,20 +137,20 @@ def recreate_database():
         conn.close()
         
         # Migrate data from the old database to the new one
-        if os.path.exists(DB_PATH):
+        if BACKUP_PATH.exists(): # Check if backup was created
             success = migrate_data(BACKUP_PATH, temp_db_path)
             if success:
                 # Replace the old database with the new one
-                if os.path.exists(DB_PATH):
-                    os.remove(DB_PATH)
-                os.rename(temp_db_path, DB_PATH)
+                if DB_PATH.exists():
+                    DB_PATH.unlink()
+                temp_db_path.rename(DB_PATH)
                 print(f"✅ Successfully recreated database at {DB_PATH}")
             else:
                 # Keep the new database for inspection but don't replace the old one
                 print(f"⚠️ Migration had errors. New database saved at {temp_db_path} for inspection.")
         else:
             # No old database to migrate from
-            os.rename(temp_db_path, DB_PATH)
+            temp_db_path.rename(DB_PATH)
             print(f"✅ Created fresh database at {DB_PATH}")
             
     except Exception as e:

@@ -17,7 +17,8 @@ def generate_walkscore_report():
 
     c.execute('''
         SELECT address, city, price, estimated_rent, 
-               walk_score, bike_score, transit_score, walkscore_shorturl
+               walk_score, bike_score, transit_score, walkscore_shorturl,
+               latitude, longitude
         FROM listings
         ORDER BY imported_at DESC
     ''')
@@ -31,7 +32,8 @@ def generate_walkscore_report():
     # Define headers
     headers = [
         "Address", "City", "Price", "Est. Rent", 
-        "Walk Score", "Bike Score", "Transit Score", "WalkScore URL"
+        "Walk Score", "Bike Score", "Transit Score", "WalkScore URL",
+        "Latitude", "Longitude"
     ]
 
     # Calculate column widths
@@ -41,7 +43,7 @@ def generate_walkscore_report():
             if value is None:
                 value = ""
             elif isinstance(value, float):
-                value = f"{value:,.2f}"
+                value = f"{value:.6f}" if idx >= 8 else f"{value:,.2f}"  # Format coordinates with 6 decimal places
             elif isinstance(value, int):
                 value = f"{value:,}"
             else:
@@ -60,7 +62,7 @@ def generate_walkscore_report():
             if value is None:
                 value = ""
             elif isinstance(value, float):
-                value = f"{value:,.2f}"
+                value = f"{value:.6f}" if idx >= 8 else f"{value:,.2f}"  # Format coordinates with 6 decimal places
             elif isinstance(value, int):
                 value = f"{value:,}"
             else:
