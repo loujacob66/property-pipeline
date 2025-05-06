@@ -1,6 +1,6 @@
 CREATE TABLE listings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    address TEXT NOT NULL,
+    address TEXT NOT NULL UNIQUE,
     city TEXT,
     state TEXT,
     zip TEXT,
@@ -35,5 +35,29 @@ CREATE TABLE listings (
     agent_phone TEXT,
     agent_email TEXT,
     schools_json TEXT,
-    price_history_json TEXT
+    price_history_json TEXT,
+    walk_score INTEGER,
+    transit_score INTEGER,
+    bike_score INTEGER,
+    walkscore_shorturl TEXT,
+    compass_shorturl TEXT,
+    latitude REAL,
+    longitude REAL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE processed_emails (
+    message_id TEXT PRIMARY KEY,
+    processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    label_id TEXT,
+    source TEXT
+);
+
+CREATE TABLE address_blacklist (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    address TEXT NOT NULL UNIQUE,
+    reason TEXT,
+    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    added_by TEXT DEFAULT 'system'
 ); 
