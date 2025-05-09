@@ -425,7 +425,9 @@ def extract_listing_details(page, listing_id):
                 "div:has-text('Active')",
                 "div:has-text('Pending')",
                 "div:has-text('Expired')",
-                "div:has-text('Sold')"
+                "div:has-text('Closed')",
+                "div:has-text('Sold')",
+                "div:has-text('Withdrawn')"
             ]
             
             status_text = None

@@ -585,7 +585,10 @@ def main():
             listings_per_label[label_name] = len(label_listings)
             print(f"✅ Fetched {len(label_listings)} new emails")
         else:
-            print("⚠️ No listings found in any emails")
+            print(f"⚠️ No listings found in any emails for label: {label_name}")
+        # Add the label to the dictionary even if no listings were found, with a count of 0 if it's not already there
+        if label_name not in listings_per_label:
+            listings_per_label[label_name] = 0
     
     if not total_listings:
         print("\n⚠️ No listings found in any emails")

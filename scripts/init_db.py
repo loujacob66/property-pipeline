@@ -43,7 +43,8 @@ def init_db():
             transit_score INTEGER,
             bike_score INTEGER,
             walkscore_shorturl TEXT,
-            compass_shorturl TEXT
+            compass_shorturl TEXT,
+            estimated_monthly_cashflow REAL
         )
     ''')
     conn.commit()
