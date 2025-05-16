@@ -59,44 +59,82 @@ def fetch_listings_needing_enrichment(query):
     finally:
         conn.close()
 
+def track_listing_changes(listing_id, field_name, old_value, new_value, source="compass-enrichment"):
+    """
+    Track changes to listing fields in the listing_changes table.
+    
+    Args:
+        listing_id (int): The ID of the listing
+        field_name (str): Name of the field that changed
+        old_value: Previous value
+        new_value: New value
+        source (str): Source of the change
+    """
+    if old_value != new_value:
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            c = conn.cursor()
+            c.execute("""
+                INSERT INTO listing_changes 
+                (listing_id, field_name, old_value, new_value, source)
+                VALUES (?, ?, ?, ?, ?)
+            """, (listing_id, field_name, str(old_value), str(new_value), source))
+            conn.commit()
+            print(f"📝 Recorded change in {field_name}: {old_value} → {new_value}")
+        finally:
+            conn.close()
+
 def store_listing_details(listing_id, details):
     """
-    Stores the extracted listing details in the database.
+    Stores the extracted listing details in the database and tracks changes.
     
     Args:
         listing_id (int): The ID of the listing to update
         details (dict): Dictionary containing the listing details
     """
-    # db_filename = os.path.join(ROOT, 'data', 'listings.db') # Use global DB_PATH
     conn = sqlite3.connect(DB_PATH)
     try:
         c = conn.cursor()
         
-        # Get existing column names from the listings table
-        c.execute("PRAGMA table_info(listings)")
-        valid_columns = {row[1] for row in c.fetchall()}
-        
-        # Filter details to only include existing columns
-        valid_fields = {k: v for k, v in details.items() if k in valid_columns and v is not None}
-        
-        if valid_fields:
-            set_clause = ", ".join(f"{key} = ?" for key in valid_fields.keys())
-            values = list(valid_fields.values()) + [listing_id]
+        # Get existing values
+        c.execute("SELECT * FROM listings WHERE id = ?", (listing_id,))
+        existing = c.fetchone()
+        if existing:
+            # Get column names
+            columns = [description[0] for description in c.description]
+            existing_dict = dict(zip(columns, existing))
             
-            print(f"   Updating fields: {', '.join(valid_fields.keys())}")
-            c.execute(
-                f"UPDATE listings SET {set_clause} WHERE id = ?",
-                values
-            )
-            conn.commit()
+            # Get existing column names from the listings table
+            c.execute("PRAGMA table_info(listings)")
+            valid_columns = {row[1] for row in c.fetchall()}
             
-            # Log key fields
-            if details.get("mls_number"):
-                print(f"   MLS#: {details['mls_number']}")
-            if details.get("tax_information"):
-                print(f"   Taxes: {details['tax_information']}")
-            if details.get("year_built"):
-                print(f"   Year Built: {details['year_built']}")
+            # Filter details to only include existing columns
+            valid_fields = {k: v for k, v in details.items() if k in valid_columns and v is not None}
+            
+            if valid_fields:
+                # Track changes for each field
+                for field, new_value in valid_fields.items():
+                    old_value = existing_dict.get(field)
+                    if old_value != new_value:
+                        track_listing_changes(listing_id, field, old_value, new_value)
+                
+                set_clause = ", ".join(f"{key} = ?" for key in valid_fields.keys())
+                values = list(valid_fields.values()) + [listing_id]
+                
+                print(f"   Updating fields: {', '.join(valid_fields.keys())}")
+                c.execute(
+                    f"UPDATE listings SET {set_clause} WHERE id = ?",
+                    values
+                )
+                conn.commit()
+                
+                # Log key fields
+                if details.get("mls_number"):
+                    print(f"   MLS#: {details['mls_number']}")
+                if details.get("tax_information"):
+                    print(f"   Taxes: {details['tax_information']}")
+                if details.get("year_built"):
+                    print(f"   Year Built: {details['year_built']}")
     finally:
         conn.close()
 
@@ -174,11 +212,18 @@ def enrich_listings_with_compass(max_listings=None):
     # First fix existing MLS types
     fix_existing_mls_types()
     
-    # db_filename = os.path.join(os.path.dirname(__file__), '..', 'data', 'listings.db') # Use global DB_PATH
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
 
-    c.execute("SELECT id, url FROM listings WHERE mls_number IS NULL OR tax_information IS NULL OR mls_type IS NULL")
+    # Modified query to include price and status fields
+    c.execute("""
+        SELECT id, url FROM listings 
+        WHERE mls_number IS NULL 
+           OR tax_information IS NULL 
+           OR mls_type IS NULL
+           OR price IS NULL
+           OR status IS NULL
+    """)
     listings = c.fetchall()
 
     if not listings:
@@ -227,6 +272,8 @@ def enrich_listings_with_compass(max_listings=None):
                 mls_number = None
                 tax_info = None
                 mls_type = None
+                price = None
+                status = None
 
                 try:
                     mls_number = iframe.locator("tr:has(th:has-text('MLS')) td").first.inner_text()
@@ -249,16 +296,35 @@ def enrich_listings_with_compass(max_listings=None):
                 except Exception:
                     print("⚠️ MLS Type not found on page.")
 
-                if mls_number or tax_info or mls_type:
-                    c.execute('''
-                        UPDATE listings
-                        SET mls_number = COALESCE(?, mls_number),
-                            tax_information = COALESCE(?, tax_information),
-                            mls_type = COALESCE(?, mls_type)
-                        WHERE id = ?
-                    ''', (mls_number, tax_info, mls_type, listing_id))
-                    conn.commit()
-                    print(f"✅ Updated listing ID {listing_id}: MLS#={mls_number}, Tax=${tax_info}, MLS Type={mls_type}")
+                try:
+                    # Wait for the price to appear (up to 5 seconds)
+                    price_element = iframe.locator("div[data-testid='price']").first
+                    if price_element:
+                        price_text = price_element.inner_text()
+                        m = re.search(r'\$([\d,]+)', price_text)
+                        if m:
+                            price = int(m.group(1).replace(',', ''))
+                except Exception:
+                    print("⚠️ Price not found on page.")
+
+                try:
+                    # Wait for the status to appear (up to 5 seconds)
+                    status_element = iframe.locator("div[data-testid='status']").first
+                    if status_element:
+                        status = status_element.inner_text()
+                except Exception:
+                    print("⚠️ Status not found on page.")
+
+                if mls_number or tax_info or mls_type or price or status:
+                    details = {
+                        'mls_number': mls_number,
+                        'tax_information': tax_info,
+                        'mls_type': mls_type,
+                        'price': price,
+                        'status': status
+                    }
+                    store_listing_details(listing_id, details)
+                    print(f"✅ Updated listing ID {listing_id}")
                 else:
                     print(f"⚠️ No updates found for listing ID {listing_id}")
 

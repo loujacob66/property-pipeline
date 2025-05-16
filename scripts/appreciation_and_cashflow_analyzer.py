@@ -31,6 +31,9 @@ ROOT = Path(__file__).parent.parent
 DEFAULT_DB_PATH = ROOT / "data" / "listings.db"
 DEFAULT_CONFIG_PATH = ROOT / "config" / "cashflow_config.json" # Assumes a shared config
 
+# --- New constant for historical data query ---
+MIN_HOMES_SOLD_THRESHOLD_HISTORICAL = 5
+
 # CapEx Components (from modified_cashflow_analyzer.py)
 CAPEX_COMPONENTS = {
     "roof": {"lifespan": 25, "cost_per_sqft": 5.5},
@@ -90,10 +93,14 @@ def parse_arguments(config):
         "square_feet": 1400.0,
         "use_dynamic_capex": False,
         "verbose": False,
-        "appreciation_rate": None, # Explicitly None, to be set by CLI, neighborhood, or other logic
+        "appreciation_rate": None, # Explicitly None, to be set by CLI, historical, or JSON logic
         "neighborhood": None,      # Explicitly None, to be auto-detected or set by CLI
         "investment_horizon": 5,
-        "fetch_real_appreciation": False
+        "fetch_real_appreciation": True, # <<< CHANGE THIS TO TRUE FOR TESTING
+        # New arguments for historical
+        "neighborhood_analysis_db_path": ROOT / "data" / "neighborhood_analysis.db", # Default path
+        "use_historical_metric": "median_sale_price_5_year_cagr_appreciation", # Default metric to use, matching DB
+        "target_city_for_historical": None # e.g., "Denver"
     }
 
     # Helper to get default value: config > script_default
@@ -129,10 +136,15 @@ def parse_arguments(config):
 
     # Appreciation-specific arguments
     parser.add_argument("--appreciation-rate", type=float, default=get_default_val("appreciation_rate"), help="Manual annual appreciation rate (%%).")
-    parser.add_argument("--neighborhood", type=str, default=get_default_val("neighborhood"), help="Manual neighborhood override. Auto-detected by ZIP if not set here or by CLI.")
+    parser.add_argument("--neighborhood", type=str, default=SCRIPT_DEFAULTS.get("neighborhood"), help="Manual neighborhood override. Auto-detected by ZIP if not set here or by CLI.")
     parser.add_argument("--investment-horizon", type=int, default=get_default_val("investment_horizon"), help="Investment holding period (years).")
     parser.add_argument("--fetch-real-appreciation", action=argparse.BooleanOptionalAction, default=get_default_val("fetch_real_appreciation"), help="Fetch real appreciation data.")
     
+    # New arguments for historical data
+    parser.add_argument("--neighborhood-analysis-db-path", type=str, default=str(SCRIPT_DEFAULTS["neighborhood_analysis_db_path"]), help="Path to neighborhood_analysis.db for historical metrics.")
+    parser.add_argument("--use-historical-metric", type=str, default=SCRIPT_DEFAULTS["use_historical_metric"], help="Metric name from neighborhood_appreciation table to use (e.g., median_sale_price_5_year_cagr).")
+    parser.add_argument("--target-city-for-historical", type=str, default=SCRIPT_DEFAULTS["target_city_for_historical"], help="Specify city for disambiguating neighborhood in historical DB.")
+
     # Now, parse_args(). If CLI provides a value, it overrides the default set above.
     args = parser.parse_args()
     
@@ -153,12 +165,12 @@ def fetch_property_data(db_path, address, verbose=False):
     cursor = conn.cursor()
     try:
         cursor.execute(
-            "SELECT price, tax_information, estimated_rent, id, sqft, year_built, zip FROM listings WHERE address = ?",
+            "SELECT price, tax_information, estimated_rent, id, sqft, year_built, zip, city FROM listings WHERE address = ?",
             (address,)
         )
         row = cursor.fetchone()
         if row:
-            db_price, db_tax_info, db_rent_raw, db_id, db_sqft_raw, db_year_built_raw, db_zip = row
+            db_price, db_tax_info, db_rent_raw, db_id, db_sqft_raw, db_year_built_raw, db_zip, db_city = row
             processed_sqft = None
             if db_sqft_raw is not None:
                 try:
@@ -183,7 +195,7 @@ def fetch_property_data(db_path, address, verbose=False):
                 "price": db_price, "tax_information_raw": db_tax_info,
                 "estimated_rent_raw": db_rent_raw, "id": db_id, "sqft": processed_sqft,
                 "year_built_raw": db_year_built_raw, "calculated_property_age": calculated_age,
-                "zip": db_zip
+                "zip": db_zip, "city": db_city
             }
         else:
             print(f"Error: Property with address '{address}' not found.", file=sys.stderr)
@@ -369,64 +381,250 @@ City Park,4.9,5.8,7.6,6.5,5.7,6.1
         if verbose: print(f"Warning: Could not process mock appreciation data: {e}", file=sys.stderr)
         return None
 
+def fetch_historical_appreciation_metric(
+    neighborhood_name, 
+    city_name, 
+    metric_to_fetch, 
+    db_path, 
+    verbose=False
+):
+    """
+    Fetches a specific historical appreciation metric from the neighborhood_analysis.db.
+    """
+    if not metric_to_fetch or not neighborhood_name:
+        if verbose: print(f"DEBUG (Historical): Metric name or neighborhood name not provided. Cannot fetch.", flush=True)
+        return None
+
+    conn_hist = None
+    try:
+        conn_hist = sqlite3.connect(db_path, timeout=10)
+        cursor_hist = conn_hist.cursor()
+
+        # Validate metric_to_fetch to prevent SQL injection if it comes from less trusted source
+        # For now, assuming it's controlled. If it could be arbitrary user input, more validation needed.
+        # Example: Check against a list of known valid column names.
+        valid_metrics = [
+            "median_sale_price_ptp_appreciation", "median_ppsf_ptp_appreciation",
+            "median_sale_price_quarterly_appreciation", "median_ppsf_quarterly_appreciation",
+            "median_sale_price_annual_appreciation", "median_ppsf_annual_appreciation",
+            "median_sale_price_3_year_cagr_appreciation", "median_ppsf_3_year_cagr_appreciation",
+            "median_sale_price_5_year_cagr_appreciation", "median_ppsf_5_year_cagr_appreciation",
+            "median_sale_price_10_year_cagr_appreciation", "median_ppsf_10_year_cagr_appreciation"
+        ]
+        if metric_to_fetch not in valid_metrics:
+            if verbose: print(f"DEBUG (Historical): Invalid metric_to_fetch: {metric_to_fetch}. Not in allowed list.", flush=True)
+            return None
+
+        # Base query: Select the metric from neighborhood_appreciation
+        # Join with neighborhood_data to filter by neighborhood_name, city, property_type, and homes_sold
+        # Order by period_end descending to get the latest metric
+        query = f"""
+            SELECT na.value
+            FROM neighborhood_appreciation na
+            JOIN neighborhood_data nd ON na.neighborhood_data_id = nd.id
+            WHERE 
+                na.metric_type = ? 
+                AND nd.property_type = 'Single Family Residential'
+                AND nd.homes_sold >= ?
+        """
+        params = [metric_to_fetch, MIN_HOMES_SOLD_THRESHOLD_HISTORICAL]
+
+        # Flexible neighborhood matching:
+        # Try to match "Denver, CO - Sloan Lake" style first, then just "Sloan Lake"
+        # The neighborhood_name from cashflow analyzer might be "sloan_lake" or "Sloan Lake"
+        # The region in DB might be "Denver, CO - Sloan Lake" or "Sloan Lake"
+        # The neighborhood_name in DB is usually the pure name like "Sloan Lake"
+        
+        # Normalize neighborhood_name from input (e.g. "sloan_lake" -> "sloan lake")
+        normalized_neighborhood_input = neighborhood_name.lower().replace('_', ' ')
+
+        # Query attempts:
+        # 1. Exact match on nd.neighborhood_name (normalized) and city if provided
+        # 2. LIKE match on nd.neighborhood_name (normalized) and city if provided
+        # 3. Exact match on nd.region (normalized input) if city NOT provided (region might contain city)
+        # 4. LIKE match on nd.region (normalized input) if city NOT provided
+        # 5. LIKE match on nd.neighborhood_name (normalized) if city NOT provided (broader)
+
+        if city_name:
+            query += " AND lower(nd.city) = ? AND lower(nd.neighborhood_name) = ?"
+            params.extend([city_name.lower(), normalized_neighborhood_input])
+        else:
+            # If no city, try matching the input against neighborhood_name or region
+            # This allows for inputs like "Sloan Lake" or "Denver, CO - Sloan Lake" directly
+            # Corrected: If no city, only match against neighborhood_name as region column is not in nd table as queried.
+            query += " AND lower(nd.neighborhood_name) = ?"
+            params.append(normalized_neighborhood_input)
+        
+        query += f" ORDER BY nd.period_end DESC LIMIT 1"
+
+
+        if verbose: print(f"DEBUG (Historical): Querying historical DB: {query} with params {params}", flush=True)
+        cursor_hist.execute(query, tuple(params))
+        result = cursor_hist.fetchone()
+
+        if result and result[0] is not None:
+            if verbose: print(f"DEBUG (Historical): Found historical metric '{metric_to_fetch}' for '{neighborhood_name}' (City: {city_name}): {result[0]}", flush=True)
+            return float(result[0]) # Return the raw decimal value from DB
+        else:
+            # Try a broader LIKE match if the specific one failed
+            query_like = f"""
+                SELECT na.value
+                FROM neighborhood_appreciation na
+                JOIN neighborhood_data nd ON na.neighborhood_data_id = nd.id
+                WHERE 
+                    na.metric_type = ? 
+                    AND nd.property_type = 'Single Family Residential'
+                    AND nd.homes_sold >= ?
+            """
+            params_like = [metric_to_fetch, MIN_HOMES_SOLD_THRESHOLD_HISTORICAL]
+
+            if city_name:
+                query_like += " AND lower(nd.city) = ? AND lower(nd.neighborhood_name) LIKE ?"
+                params_like.extend([city_name.lower(), f"%{normalized_neighborhood_input}%"])
+            else:
+                # Corrected: If no city, only match against neighborhood_name with LIKE
+                query_like += " AND lower(nd.neighborhood_name) LIKE ?"
+                params_like.append(f"%{normalized_neighborhood_input}%")
+            
+            query_like += f" ORDER BY nd.period_end DESC LIMIT 1"
+            
+            if verbose: print(f"DEBUG (Historical): Retrying with LIKE query: {query_like} with params {params_like}", flush=True)
+            cursor_hist.execute(query_like, tuple(params_like))
+            result_like = cursor_hist.fetchone()
+
+            if result_like and result_like[0] is not None:
+                 if verbose: print(f"DEBUG (Historical): Found historical metric (LIKE match) '{metric_to_fetch}' for '{neighborhood_name}' (City: {city_name}): {result_like[0]}", flush=True)
+                 return float(result_like[0]) # Return the raw decimal value from DB
+            else:
+                if verbose: print(f"DEBUG (Historical): No historical metric found for '{neighborhood_name}' (City: {city_name}, Metric: {metric_to_fetch}) after all attempts.", flush=True)
+                return None
+
+    except sqlite3.Error as e:
+        if verbose: print(f"SQLite error when fetching historical appreciation for '{neighborhood_name}': {e}", file=sys.stderr)
+        return None
+    except Exception as e:
+        if verbose: print(f"General error when fetching historical appreciation for '{neighborhood_name}': {e}", file=sys.stderr)
+        return None
+    finally:
+        if conn_hist:
+            conn_hist.close()
 
 def calculate_appreciation_returns(
     financials, # Expects the dictionary from calculate_financial_components
     investment_horizon,
-    manual_appreciation_rate=None, # Renamed for clarity
-    neighborhood_name=None, # Renamed for clarity
-    fetch_real_data_flag=False, # Renamed for clarity
-    neighborhood_appreciation_config=None, # New parameter for config data
+    manual_appreciation_rate=None, 
+    neighborhood_name=None, 
+    fetch_real_data_flag=False, # This is the boolean value of the flag
+    neighborhood_appreciation_config=None, # This is the data from config.json
+    # New args for historical data
+    use_historical_metric_name=None,
+    historical_db_path=None,
+    target_city_for_historical=None,
     verbose=False
 ):
     purchase_price = financials["purchase_price"]
+    down_payment_amount = financials["down_payment_amount"]
     loan_amount = financials["loan_amount"]
     annual_interest_rate_percent = financials["annual_interest_rate_percent"]
     loan_term_years = financials["loan_term_years"]
-    annual_cashflow = financials["annual_cashflow"] 
-    down_payment_amount = financials["down_payment_amount"]
+    annual_cashflow = financials["annual_cashflow"]
 
-    eff_app_rate = 5.0  # Default fallback if no other rate is determined
-    market_outlook = "moderate" # Default fallback
+    eff_app_rate = None  # Effective annual appreciation rate in percent (e.g., 5.0 for 5%)
+    market_outlook = "N/A"
+    source_of_data_message = "N/A"
 
-    if fetch_real_data_flag:
-        if verbose: print(f"DEBUG: --fetch-real-appreciation is TRUE. Using neighborhood data from config ('{neighborhood_appreciation_config is not None}') as the source.", flush=True)
-        if neighborhood_name and neighborhood_appreciation_config:
-            lookup_key = neighborhood_name.lower().replace(' ', '_')
-            default_entry = neighborhood_appreciation_config.get("default", 
-                                                               {"historical_appreciation": 5.0, "short_term_outlook": "moderate"})
-            neighborhood_info = neighborhood_appreciation_config.get(lookup_key, default_entry)
-            
-            eff_app_rate = neighborhood_info.get("historical_appreciation", default_entry["historical_appreciation"])
-            market_outlook = neighborhood_info.get("short_term_outlook", default_entry["short_term_outlook"])
-            
-            if verbose and lookup_key not in neighborhood_appreciation_config and lookup_key != "default":
-                 print(f"Warning (fetch_real=True): Neighborhood '{neighborhood_name}' (key: '{lookup_key}') not in config data. Using default from config.", file=sys.stderr)
-            if verbose: print(f"DEBUG (fetch_real=True): Using data from config for '{lookup_key}': Appr: {eff_app_rate:.2f}%, Outlook: {market_outlook}", flush=True)
+    # Step 1: Try Historical DB if fetch_real_data_flag is True
+    historical_metric_value_raw = None # This will be the direct value from DB, e.g., 0.06069
+    if fetch_real_data_flag and use_historical_metric_name and historical_db_path and target_city_for_historical:
+        if verbose: print(f"DEBUG: Attempting to fetch historical metric '{use_historical_metric_name}' for neighborhood '{neighborhood_name}' (City: {target_city_for_historical}) from DB: {historical_db_path}", flush=True)
+        historical_metric_value_raw = fetch_historical_appreciation_metric(
+            neighborhood_name=neighborhood_name,
+            city_name=target_city_for_historical,
+            metric_to_fetch=use_historical_metric_name,
+            db_path=historical_db_path,
+            verbose=verbose
+        )
+        if historical_metric_value_raw is not None:
+            eff_app_rate = historical_metric_value_raw # The value from DB is already a percentage (e.g., 6.069)
+            market_outlook = "historical_db" 
+            source_of_data_message = f"Historical DB ({use_historical_metric_name})"
+            if verbose: print(f"DEBUG: Using HISTORICAL DB rate: {eff_app_rate:.2f}%. Outlook: {market_outlook}. Source: {source_of_data_message}", flush=True)
         elif verbose:
-            print(f"Warning (fetch_real=True): Neighborhood name or appreciation config data missing. Using fallback appreciation {eff_app_rate:.2f}%.", file=sys.stderr)
+            print(f"DEBUG: Historical metric '{use_historical_metric_name}' not found for '{neighborhood_name}' (City: {target_city_for_historical}). Will check JSON/default.", flush=True)
 
-    elif neighborhood_name and neighborhood_appreciation_config: # This block is for when fetch_real_data_flag is FALSE
-        if verbose: print(f"DEBUG: --fetch-real-appreciation is FALSE. Using neighborhood data from config.", flush=True)
-        lookup_key = neighborhood_name.lower().replace(' ', '_')
-        default_entry = neighborhood_appreciation_config.get("default", 
-                                                           {"historical_appreciation": 5.0, "short_term_outlook": "moderate"})
-        neighborhood_info = neighborhood_appreciation_config.get(lookup_key, default_entry)
-        
-        eff_app_rate = neighborhood_info.get("historical_appreciation", default_entry["historical_appreciation"])
-        market_outlook = neighborhood_info.get("short_term_outlook", default_entry["short_term_outlook"])
+    # Step 2: If Historical not used OR not found, try JSON config data
+    # This logic applies if fetch_real_data_flag was False, OR if it was True but no historical_metric_value_raw was found.
+    if eff_app_rate is None:
+        if verbose: print(f"DEBUG: Historical rate not applied. Checking JSON config for neighborhood '{neighborhood_name}'. fetch_real_data_flag was {fetch_real_data_flag}.", flush=True)
+        if neighborhood_appreciation_config and neighborhood_name:
+            # Try exact match first
+            hood_data = neighborhood_appreciation_config.get(neighborhood_name)
+            if not hood_data and '_' in neighborhood_name: # try replacing underscore with space or vice-versa if common pattern
+                hood_data = neighborhood_appreciation_config.get(neighborhood_name.replace('_', ' '))
+            if not hood_data and ' ' in neighborhood_name:
+                 hood_data = neighborhood_appreciation_config.get(neighborhood_name.replace(' ', '_'))
 
-        if verbose and lookup_key not in neighborhood_appreciation_config and lookup_key != "default":
-             print(f"Warning (fetch_real=False): Neighborhood '{neighborhood_name}' (key: '{lookup_key}') not in config data. Using default from config.", file=sys.stderr)
-        if verbose: print(f"DEBUG (fetch_real=False): Using data from config for '{lookup_key}': Appr: {eff_app_rate:.2f}%, Outlook: {market_outlook}", flush=True)
-    elif verbose: # fetch_real_data_flag is False, and also no neighborhood_name or no neighborhood_appreciation_config
-        print(f"Warning: No neighborhood data source. Using fallback appreciation {eff_app_rate:.2f}%.", file=sys.stderr)
+            if hood_data:
+                json_appr_rate = hood_data.get("historical_appreciation")
+                if json_appr_rate is not None:
+                    try:
+                        eff_app_rate = float(json_appr_rate)
+                        market_outlook = hood_data.get("long_term_outlook", "N/A (from JSON)")
+                        source_of_data_message = f"JSON Config ('{neighborhood_name}')"
+                        if verbose: print(f"DEBUG: Using JSON config for '{neighborhood_name}': Appr: {eff_app_rate:.2f}%, Outlook: {market_outlook}. Source: {source_of_data_message}", flush=True)
+                    except ValueError:
+                        if verbose: print(f"Warning: Could not parse 'historical_appreciation' from JSON for '{neighborhood_name}': {json_appr_rate}", flush=True)
+                elif verbose:
+                    print(f"DEBUG: Neighborhood '{neighborhood_name}' found in JSON, but no 'historical_appreciation' field.", flush=True)
+            elif verbose:
+                print(f"DEBUG: Neighborhood '{neighborhood_name}' not found in JSON config. Will check for a general default in JSON.", flush=True)
 
-    # Manual Override (Highest Precedence)
+        # If specific neighborhood not in JSON or no rate, try the 'default' from JSON
+        if eff_app_rate is None and neighborhood_appreciation_config:
+            default_hood_data = neighborhood_appreciation_config.get("default")
+            if default_hood_data:
+                json_default_appr_rate = default_hood_data.get("historical_appreciation")
+                if json_default_appr_rate is not None:
+                    try:
+                        eff_app_rate = float(json_default_appr_rate)
+                        market_outlook = default_hood_data.get("long_term_outlook", "N/A (from JSON default)")
+                        source_of_data_message = "JSON Config (default)"
+                        if verbose: print(f"DEBUG: Using JSON config 'default': Appr: {eff_app_rate:.2f}%, Outlook: {market_outlook}. Source: {source_of_data_message}", flush=True)
+                    except ValueError:
+                        if verbose: print(f"Warning: Could not parse 'historical_appreciation' from JSON for 'default': {json_default_appr_rate}", flush=True)
+                elif verbose:
+                    print(f"DEBUG: JSON 'default' entry found, but no 'historical_appreciation' field.", flush=True)
+            elif verbose:
+                print(f"DEBUG: No 'default' entry found in JSON config's neighborhood_appreciation_data.", flush=True)
+        elif eff_app_rate is None and verbose: # If still None and no neighborhood_appreciation_config
+             print(f"DEBUG: No neighborhood_appreciation_config provided or processed. eff_app_rate remains None.", flush=True)
+
+
+    # Step 3: Manual Override (Highest Precedence)
+    # This applies *after* the above attempts. If manual_appreciation_rate is set, it wins.
     if manual_appreciation_rate is not None:
-        eff_app_rate = manual_appreciation_rate
-        market_outlook = "manual_override" # Indicate that the rate was manually set
-        if verbose: print(f"DEBUG: Manually overriding appreciation rate to: {eff_app_rate:.2f}% (Outlook: {market_outlook})", flush=True)
+        eff_app_rate = manual_appreciation_rate # This is already a percentage
+        market_outlook = "manual_override"
+        source_of_data_message = "CLI Manual Rate Override"
+        if verbose: print(f"DEBUG: Manually overriding appreciation rate to: {eff_app_rate:.2f}%. Outlook: {market_outlook}. Source: {source_of_data_message}", flush=True)
+    
+    # Step 4. Final Fallback if nothing else set eff_app_rate
+    if eff_app_rate is None:
+        # SCRIPT_DEFAULTS['appreciation_rate'] is None by default, so this won't trigger from there unless changed.
+        # We might want a hardcoded ultimate fallback if SCRIPT_DEFAULTS['appreciation_rate'] could also be None.
+        ultimate_fallback_rate = SCRIPT_DEFAULTS.get("appreciation_rate") # Check if script has a default
+        if ultimate_fallback_rate is not None:
+             eff_app_rate = ultimate_fallback_rate
+             market_outlook = "script_default_fallback"
+             source_of_data_message = "Script Default Fallback"
+             if verbose: print(f"DEBUG: No appreciation rate found from historical, JSON, or CLI. Using SCRIPT_DEFAULTS['appreciation_rate']: {eff_app_rate:.2f}%. Source: {source_of_data_message}", flush=True)
+        else:
+            if verbose: print(f"DEBUG: No appreciation rate found from historical, JSON, CLI or SCRIPT_DEFAULTS. Using a final hardcoded default of 0.0%.", flush=True)
+            eff_app_rate = 0.0 # Final hardcoded fallback
+            market_outlook = "hardcoded_fallback"
+            source_of_data_message = "Script Hardcoded Fallback (0.0%)"
+
+    if verbose: print(f"INFO: Final effective appreciation rate: {eff_app_rate:.2f}%, Outlook: {market_outlook}, Source: {source_of_data_message}")
 
     future_val = purchase_price * ((1 + (eff_app_rate / 100)) ** investment_horizon)
     total_appr = future_val - purchase_price
@@ -477,8 +675,12 @@ def calculate_appreciation_returns(
         "total_profit": total_profit, "total_roi_percent_on_equity": total_roi_pct,
         "annualized_roi_on_equity": annualized_roi,
         "initial_equity": down_payment_amount, "total_equity_at_horizon": total_equity_at_horizon,
-        "market_outlook_assessment": market_outlook, # Based on fetched or local data
-        "investment_horizon_years": investment_horizon
+        "market_outlook_assessment": market_outlook, # USE THE RESOLVED market_outlook
+        "investment_horizon_years": investment_horizon,
+        "source_of_appreciation_data": source_of_data_message, # For transparency
+        "use_historical_metric_name": use_historical_metric_name,
+        "historical_db_path": historical_db_path,
+        "target_city_for_historical": target_city_for_historical
     }
 
 # --- Output Formatting Helpers (from modified_cashflow_analyzer.py) ---
@@ -510,39 +712,40 @@ def print_capex_guide(args): # Now expects args for verbose
     if args.verbose: print("DEBUG: Exiting print_capex_guide function...", flush=True)
 
 # --- Main Calculation and Printing Logic ---
-def run_analysis_and_print(args, property_data, neighborhood_data_from_config, effective_neighborhood_name_for_analysis):
-    if args.verbose: print(f"DEBUG: Running analysis for property: {property_data}", flush=True)
-    if args.verbose: print(f"DEBUG: Neighborhood appreciation data being used (full config map): {neighborhood_data_from_config}", flush=True)
-    if args.verbose: print(f"DEBUG: Effective neighborhood name for this analysis: {effective_neighborhood_name_for_analysis}", flush=True)
+def run_analysis_and_print(args_dict, property_data, neighborhood_data_from_config, effective_neighborhood_name_for_analysis):
+    # args_dict is now a dictionary
+    if args_dict.get('verbose'): print(f"DEBUG: Running analysis for property: {property_data}", flush=True)
+    if args_dict.get('verbose'): print(f"DEBUG: Neighborhood appreciation data being used (full config map): {neighborhood_data_from_config}", flush=True)
+    if args_dict.get('verbose'): print(f"DEBUG: Effective neighborhood name for this analysis: {effective_neighborhood_name_for_analysis}", flush=True)
 
     # Determine actual sq_ft and prop_age (DB > CLI/Config > Default)
-    actual_sq_ft = args.square_feet
+    actual_sq_ft = args_dict.get('square_feet')
     if property_data.get("sqft") is not None: actual_sq_ft = property_data["sqft"]
-    elif args.verbose: print(f"DEBUG: Using arg/config for sqft: {actual_sq_ft}", flush=True)
+    elif args_dict.get('verbose'): print(f"DEBUG: Using arg/config for sqft: {actual_sq_ft}", flush=True)
     
-    actual_prop_age = args.property_age
+    actual_prop_age = args_dict.get('property_age')
     if property_data.get("calculated_property_age") is not None: actual_prop_age = property_data["calculated_property_age"]
-    elif args.verbose: print(f"DEBUG: Using arg/config for age: {actual_prop_age} (DB year: {property_data.get('year_built_raw')})", flush=True)
+    elif args_dict.get('verbose'): print(f"DEBUG: Using arg/config for age: {actual_prop_age} (DB year: {property_data.get('year_built_raw')})", flush=True)
 
     financials = calculate_financial_components(
         purchase_price=property_data["price"],
         tax_info_raw=property_data["tax_information_raw"],
         est_monthly_rent=property_data["estimated_rent_raw"],
-        down_payment_dollars=args.down_payment,
-        annual_rate_percent=args.rate,
-        loan_term_years=args.loan_term,
-        annual_insurance=args.insurance,
-        misc_monthly=args.misc_monthly,
-        vacancy_rate_pct=args.vacancy_rate,
-        property_mgmt_fee_pct=args.property_mgmt_fee,
-        maintenance_pct=args.maintenance_percent,
-        capex_pct=args.capex_percent,
-        utilities_monthly=args.utilities_monthly,
-        use_dynamic_capex=args.use_dynamic_capex,
+        down_payment_dollars=args_dict.get('down_payment'),
+        annual_rate_percent=args_dict.get('rate'),
+        loan_term_years=args_dict.get('loan_term'),
+        annual_insurance=args_dict.get('insurance'),
+        misc_monthly=args_dict.get('misc_monthly'),
+        vacancy_rate_pct=args_dict.get('vacancy_rate'),
+        property_mgmt_fee_pct=args_dict.get('property_mgmt_fee'),
+        maintenance_pct=args_dict.get('maintenance_percent'),
+        capex_pct=args_dict.get('capex_percent'),
+        utilities_monthly=args_dict.get('utilities_monthly'),
+        use_dynamic_capex=args_dict.get('use_dynamic_capex'),
         prop_age=actual_prop_age,
-        prop_cond=args.property_condition,
+        prop_cond=args_dict.get('property_condition'),
         sq_ft=actual_sq_ft,
-        verbose=args.verbose
+        verbose=args_dict.get('verbose')
     )
 
     if not financials:
@@ -551,16 +754,18 @@ def run_analysis_and_print(args, property_data, neighborhood_data_from_config, e
 
     appreciation_returns = calculate_appreciation_returns(
         financials=financials,
-        investment_horizon=args.investment_horizon,
-        manual_appreciation_rate=args.appreciation_rate,
+        investment_horizon=args_dict.get('investment_horizon'),
+        manual_appreciation_rate=args_dict.get('appreciation_rate'), 
         neighborhood_name=effective_neighborhood_name_for_analysis,
-        fetch_real_data_flag=args.fetch_real_appreciation,
+        fetch_real_data_flag=args_dict.get('fetch_real_appreciation'),
         neighborhood_appreciation_config=neighborhood_data_from_config,
-        verbose=args.verbose
+        use_historical_metric_name=args_dict.get('use_historical_metric'),
+        historical_db_path=args_dict.get('neighborhood_analysis_db_path'),
+        target_city_for_historical=args_dict.get('target_city_for_historical'), 
+        verbose=args_dict.get('verbose')
     )
     
     # --- Printing The Report ---
-    # (Colorization helpers can be added here if desired, like in modified_cashflow_analyzer.py)
     use_color = sys.stdout.isatty()
     pos_color, neg_color, bold, end_color = ('\033[92m', '\033[91m', '\033[1m', '\033[0m') if use_color else ('','','','')
 
@@ -570,13 +775,12 @@ def run_analysis_and_print(args, property_data, neighborhood_data_from_config, e
         if amount is None: return val
         return colorize(val, pos_color if amount > 0 else (neg_color if amount < 0 else ''))
 
-
     print(hr("="))
-    print(colorize(f"REAL ESTATE INVESTMENT ANALYSIS: {args.address}", bold))
+    print(colorize(f"REAL ESTATE INVESTMENT ANALYSIS: {args_dict.get('address')}", bold))
     print(f"Analysis Date: {datetime.datetime.now().strftime('%B %d, %Y')}")
     print(hr("="))
 
-    # Property & Loan Details
+    # Property & Loan Details (using .get for safety with dict)
     print(section_title("Property & Loan Details", "-"))
     print(format_label_value("Purchase Price:", format_currency(financials["purchase_price"])))
     print(format_label_value("Square Footage:", f"{financials['square_feet']:.0f} sq ft" if financials['square_feet'] else "N/A"))
@@ -590,7 +794,7 @@ def run_analysis_and_print(args, property_data, neighborhood_data_from_config, e
     # Monthly Cashflow Analysis
     print(section_title("Monthly Cashflow Analysis", "-"))
     print(format_label_value("Gross Monthly Rent:", format_currency(financials["estimated_monthly_rent"])))
-    if args.use_dynamic_capex:
+    if args_dict.get('use_dynamic_capex'):
         print(format_label_value("Vacancy Loss:", f"{format_currency(financials['estimated_monthly_rent'] - financials['effective_rent_after_vacancy'])} ({format_percent(financials['vacancy_rate_percent'])})"))
         print(format_label_value("Effective Monthly Income:", format_currency(financials['effective_rent_after_vacancy'])))
     
@@ -599,7 +803,7 @@ def run_analysis_and_print(args, property_data, neighborhood_data_from_config, e
     print(format_label_value("Property Taxes:", f"{format_currency(financials['monthly_taxes'])}{tax_warn}"))
     print(format_label_value("Insurance:", format_currency(financials['monthly_insurance'])))
     
-    if args.use_dynamic_capex:
+    if args_dict.get('use_dynamic_capex'):
         print(format_label_value("Property Management:", f"{format_currency(financials['monthly_property_mgmt'])} ({format_percent(financials['property_mgmt_fee_percent'])})"))
         print(format_label_value("Maintenance Reserve:", f"{format_currency(financials['monthly_maintenance'])} ({format_percent(financials['adjusted_maintenance_percent'])} annual)"))
         print(format_label_value("CapEx Reserve:", f"{format_currency(financials['monthly_capex'])} ({format_percent(financials['adjusted_capex_percent'])} of value)"))
@@ -612,13 +816,13 @@ def run_analysis_and_print(args, property_data, neighborhood_data_from_config, e
     print(format_label_value(f"{bold}Net Monthly Cashflow:{end_color}", f_curr_color(financials['net_monthly_cashflow'])))
     print(format_label_value(f"{bold}Annual Cashflow:{end_color}", f_curr_color(financials['annual_cashflow'])))
     print(format_label_value(f"{bold}Cash-on-Cash ROI:{end_color}", format_percent(financials['cash_on_cash_roi'])))
-    if args.use_dynamic_capex and financials.get('cap_rate') is not None:
+    if args_dict.get('use_dynamic_capex') and financials.get('cap_rate') is not None:
         print(format_label_value("Cap Rate (NOI Based):", format_percent(financials['cap_rate'])))
 
     # Long-Term Investment & Appreciation Analysis
-    print(section_title(f"Long-Term Projection ({args.investment_horizon} Years)", "-"))
+    print(section_title(f"Long-Term Projection ({args_dict.get('investment_horizon')} Years)", "-"))
     print(format_label_value("Investment Horizon:", f"{appreciation_returns['investment_horizon_years']} years"))
-    print(format_label_value("Annual Appreciation Rate:", f"{format_percent(appreciation_returns['annual_appreciation_rate_used'])} (Market: {appreciation_returns['market_outlook_assessment']})"))
+    print(format_label_value("Annual Appreciation Rate:", f"{format_percent(appreciation_returns['annual_appreciation_rate_used'])} (Market: {appreciation_returns['market_outlook_assessment']}, Source: {appreciation_returns['source_of_appreciation_data']})"))
     print(format_label_value("Est. Future Property Value:", format_currency(appreciation_returns['future_value'])))
     print(format_label_value("Total Property Appreciation:", format_currency(appreciation_returns['total_appreciation'])))
     print(format_label_value("Equity from Paydown:", format_currency(appreciation_returns['equity_from_mortgage_paydown'])))
@@ -630,8 +834,7 @@ def run_analysis_and_print(args, property_data, neighborhood_data_from_config, e
     print(format_label_value(f"{bold}Total ROI (on initial equity):{end_color}", format_percent(appreciation_returns['total_roi_percent_on_equity'])))
     print(format_label_value(f"{bold}Annualized ROI (on equity):{end_color}", format_percent(appreciation_returns['annualized_roi_on_equity'])))
     
-    # --- Detailed CapEx Breakdown (Printed BEFORE Deal Summary if applicable) ---
-    if args.use_dynamic_capex and financials.get("capex_reserve_details"):
+    if args_dict.get('use_dynamic_capex') and financials.get("capex_reserve_details"):
         print(section_title("Detailed CapEx Breakdown (Dynamic Mode)", "-"))
         details = financials["capex_reserve_details"]["components"]
         col_comp, col_cost, col_life, col_month = 24, 18, 12, 18
@@ -647,263 +850,191 @@ def run_analysis_and_print(args, property_data, neighborhood_data_from_config, e
         print(hr('-', 80))
         print(format_label_value("Total Monthly CapEx Reserve:", format_currency(financials['monthly_capex'])))
 
-    # --- Deal Analysis & Summary (Now printed after CapEx details) ---
     print(section_title("Deal Analysis & Summary", "-"))
 
-    # --- Scoring Logic ---
     def score_cashflow(cf_monthly):
-        if cf_monthly > 300: return 2.5
-        if cf_monthly > 100: return 1.5
-        if cf_monthly > 0: return 0.5
-        if cf_monthly == 0: return 0.0
-        if cf_monthly > -100: return -0.5
-        if cf_monthly > -300: return -1.5
-        return -2.5
+        if cf_monthly > 300: return 2.5, "Excellent"
+        if cf_monthly > 100: return 1.5, "Good"
+        if cf_monthly > 0: return 0.5, "Fair"
+        if cf_monthly == 0: return 0.0, "Neutral"
+        if cf_monthly > -100: return -0.5, "Poor"
+        if cf_monthly > -300: return -1.5, "Very Poor"
+        return -2.5, "Extremely Poor"
 
     def score_coc_roi(coc):
-        if coc is None: return -1.0 # Penalize if not calculable (e.g., zero down payment)
-        if coc > 12: return 2.5
-        if coc > 8: return 1.5
-        if coc > 5: return 0.5
-        if coc >= 0: return 0.0 # Slightly positive or zero is neutral here
-        if coc > -5: return -1.0
-        return -2.5
+        if coc > 12: return 2.5, "Excellent"
+        if coc > 8: return 1.5, "Good"
+        if coc > 5: return 0.5, "Fair"
+        if coc > 2: return 0.0, "Neutral"
+        if coc >= 0 : return -0.5, "Poor"
+        return -1.5, "Very Poor"
 
     def score_cap_rate(cap, is_dynamic_capex):
-        if not is_dynamic_capex or cap is None: return 0.0 # Neutral if not dynamic or not calculable
-        if cap > 8: return 2.5
-        if cap > 6: return 1.5
-        if cap > 4: return 0.5
-        if cap > 0: return -0.5 # Positive but low cap rate
-        return -1.0 # Negative cap rate
+        if not is_dynamic_capex or cap is None: return 0.0, "N/A (Dynamic CapEx off or N/A)"
+        if cap > 7: return 2.0, "Excellent"
+        if cap > 5.5: return 1.0, "Good"
+        if cap > 4: return 0.0, "Fair"
+        if cap > 2.5: return -1.0, "Poor"
+        return -2.0, "Very Poor"
 
     def score_annualized_total_roi(annual_roi):
-        if annual_roi is None: return 0.0 # Should ideally always be calculable
-        if annual_roi > 15: return 2.5
-        if annual_roi > 10: return 1.5
-        if annual_roi > 5: return 0.5
-        if annual_roi >= 0: return 0.0
-        if annual_roi > -5: return -1.0
-        return -2.5
+        if annual_roi > 15: return 2.0, "Excellent"
+        if annual_roi > 10: return 1.0, "Good"
+        if annual_roi > 7: return 0.5, "Fair"
+        if annual_roi > 4: return 0.0, "Neutral"
+        if annual_roi >= 0: return -0.5, "Poor"
+        return -1.0, "Very Poor"
 
-    cf_monthly_val = financials['net_monthly_cashflow']
-    coc_roi_val = financials['cash_on_cash_roi']
-    cap_rate_val = financials.get('cap_rate') # Might be None
-    annualized_total_roi_val = appreciation_returns.get('annualized_roi_on_equity')
+    overall_score = 0
+    summary_lines = []
 
-    score_cf = score_cashflow(cf_monthly_val)
-    score_coc = score_coc_roi(coc_roi_val)
-    score_cap = score_cap_rate(cap_rate_val, args.use_dynamic_capex)
-    score_ann_roi = score_annualized_total_roi(annualized_total_roi_val)
+    cf_score, cf_rating = score_cashflow(financials['net_monthly_cashflow'])
+    overall_score += cf_score
+    print(format_label_value("Net Monthly Cashflow:", f"{f_curr_color(financials['net_monthly_cashflow'])} (Rating: {cf_rating}, Score: {cf_score})"))
+    summary_lines.append(f"Net Monthly Cashflow rating: {cf_rating.lower()}")
 
-    raw_total_score = score_cf + score_coc + score_cap + score_ann_roi
-    final_score = max(-10.0, min(10.0, raw_total_score))
+    coc_score, coc_rating = score_coc_roi(financials['cash_on_cash_roi'])
+    overall_score += coc_score
+    print(format_label_value("Cash-on-Cash ROI:", f"{format_percent(financials['cash_on_cash_roi'])} (Rating: {coc_rating}, Score: {coc_score})"))
+    summary_lines.append(f"Cash-on-Cash ROI rating: {coc_rating.lower()}")
 
-    # Qualitative Score Assessment
-    score_interpretation = ""
-    if final_score >= 8: score_interpretation = "Excellent Investment Prospect"
-    elif final_score >= 5: score_interpretation = "Good Investment Prospect"
-    elif final_score >= 1: score_interpretation = "Fair Investment Prospect, Potential Upsides"
-    elif final_score > -2: score_interpretation = "Marginal Investment, Exercise Caution"
-    elif final_score > -5: score_interpretation = "Poor Investment Prospect"
-    else: score_interpretation = "Very Poor Investment Prospect, Likely Avoid"
+    cap_score, cap_rating = score_cap_rate(financials.get('cap_rate'), args_dict.get('use_dynamic_capex'))
+    overall_score += cap_score
+    print(format_label_value("Cap Rate (NOI Based):", f"{format_percent(financials.get('cap_rate'))} (Rating: {cap_rating}, Score: {cap_score})"))
+    summary_lines.append(f"Cap Rate rating: {cap_rating.lower()}")
 
-    print(colorize(format_label_value("Overall Investment Score:", f"{final_score:.1f}/10 ({score_interpretation})"), bold))
+    annual_roi_score, annual_roi_rating = score_annualized_total_roi(appreciation_returns['annualized_roi_on_equity'])
+    overall_score += annual_roi_score
+    print(format_label_value("Annualized Total ROI (Equity):", f"{format_percent(appreciation_returns['annualized_roi_on_equity'])} (Score: {annual_roi_score})")) # Rating not printed here for space
+    summary_lines.append(f"long-term total returns rated: {annual_roi_rating.lower()}")
+
+    # Normalize overall_score to a 0-10 scale (assuming max positive score ~8, min score ~-8)
+    # This is a rough normalization, can be refined.
+    # Max possible score: 2.5 (CF) + 2.5 (CoC) + 2.0 (Cap) + 2.0 (AnnualROI) = 9.0
+    # Min possible score: -2.5 - 1.5 - 2.0 - 1.0 = -7.0
+    # Range is 16. Let's map -7 to 0 and 9 to 10.
+    normalized_score = ((overall_score - (-7)) / (9 - (-7))) * 10 if (9 - (-7)) != 0 else 0
+    normalized_score = max(0, min(10, normalized_score)) # Clamp between 0 and 10
+
+    overall_rating = "Poor Investment Prospect"
+    if normalized_score >= 8.5: overall_rating = "Excellent Investment Prospect!"
+    elif normalized_score >= 6.5: overall_rating = "Good Investment Prospect"
+    elif normalized_score >= 4.0: overall_rating = "Fair Investment Prospect, Potential Upsides"
+    elif normalized_score >= 2.0: overall_rating = "Marginal Investment, Consider Carefully"
+    
     print(hr("-", 40))
-    
-    # Print individual metric ratings (using previous logic for now, can be integrated with scores)
-    coc_rating = ("Excellent" if coc_roi_val is not None and coc_roi_val > 12 else
-                  "Good" if coc_roi_val is not None and coc_roi_val > 8 else
-                  "Fair" if coc_roi_val is not None and coc_roi_val > 5 else
-                  "Poor" if coc_roi_val is not None else "N/A")
+    print(format_label_value(f"{bold}Overall Investment Score:{end_color}", f"{normalized_score:.1f}/10 ({overall_rating})"))
+    print(hr("-", 40))
 
-    cap_rating = "N/A"
-    if args.use_dynamic_capex and cap_rate_val is not None:
-        cap_rating = ("Excellent" if cap_rate_val > 8 else
-                      "Good" if cap_rate_val > 6 else
-                      "Fair" if cap_rate_val > 4 else
-                      "Poor")
-
-    cashflow_rating = ("Excellent" if cf_monthly_val > 300 else
-                       "Good" if cf_monthly_val > 100 else
-                       "Fair" if cf_monthly_val > 0 else
-                       "Poor" if cf_monthly_val <=0 else "N/A") # Adjusted poor condition
-
-    print(format_label_value("Net Monthly Cashflow:", f"{format_currency(cf_monthly_val)} (Rating: {cashflow_rating}, Score: {score_cf:.1f})"))
-    print(format_label_value("Cash-on-Cash ROI:", f"{format_percent(coc_roi_val)} (Rating: {coc_rating}, Score: {score_coc:.1f})"))
-    
-    if args.use_dynamic_capex:
-        print(format_label_value("Cap Rate (NOI Based):", f"{format_percent(cap_rate_val)} (Rating: {cap_rating}, Score: {score_cap:.1f})"))
-    else:
-        print(format_label_value("Cap Rate (NOI Based):", "N/A (Requires Dynamic CapEx mode)"))
+    # New summary block
+    print() # Add a blank line for spacing
+    print(f"{bold}Key Performance Indicators:{end_color}")
+    for line_text in summary_lines:
+        # Example line_text: "Net Monthly Cashflow rating: excellent"
+        # Or: "Cap Rate rating: n/a (dynamic capex off or n/a)"
+        # Or: "long-term total returns rated: good"
+        cleaned_text = line_text.replace(" rating: ", ": ").replace(" rated: ", ": ")
         
-    print(format_label_value("Annualized Total ROI (Equity):", f"{format_percent(annualized_total_roi_val)} (Score: {score_ann_roi:.1f})"))
+        parts = cleaned_text.split(': ')
+        if len(parts) == 2:
+            indicator_display = parts[0].capitalize()
+            value_display = parts[1]
+            # Special handling for "N/A" to ensure it's uppercase, then capitalize rest or keep as is
+            if value_display.lower().startswith("n/a"):
+                value_display = "N/A" + value_display[3:] # Preserve details after "n/a"
+            else:
+                value_display = value_display.capitalize() # Capitalize ratings like "excellent"
+            print(f"  - {indicator_display}: {value_display}")
+        else:
+            # Fallback if splitting failed (should not happen with current summary_lines structure)
+            print(f"  - {cleaned_text.capitalize()}")
     
-    # Construct a more detailed summary statement
-    summary_points = []
-    if score_cf > 1.0: summary_points.append("strong positive cashflow")
-    elif score_cf < -1.0: summary_points.append("significant negative cashflow")
-    elif score_cf <=0: summary_points.append("marginal or negative cashflow")
-    else: summary_points.append("modest positive cashflow")
-
-    if score_coc > 1.0: summary_points.append("excellent CoC ROI")
-    elif score_coc < -1.0: summary_points.append("poor CoC ROI")
-    else: summary_points.append("moderate CoC ROI")
-
-    if args.use_dynamic_capex:
-        if score_cap > 1.0: summary_points.append("strong Cap Rate")
-        elif score_cap < 0: summary_points.append("weak Cap Rate") # cap score is 0 or negative if not strong
-        else: summary_points.append("fair Cap Rate")
-    else:
-        summary_points.append("Cap Rate not assessed (Dynamic CapEx off)")
-
-    if score_ann_roi > 1.0: summary_points.append("promising long-term total returns")
-    elif score_ann_roi < -1.0: summary_points.append("poor long-term total return outlook")
-    else: summary_points.append("moderate long-term total returns expected")
-
-    # Final summary statement based on the score and points
-    final_summary_text = f"SUMMARY ({final_score:.1f}/10 - {score_interpretation}): This property shows "
-    if len(summary_points) > 0:
-        if len(summary_points) == 1:
-            final_summary_text += summary_points[0] + "."
-        elif len(summary_points) == 2:
-            final_summary_text += summary_points[0] + " and " + summary_points[1] + "."
-        else: # more than 2
-            final_summary_text += ", ".join(summary_points[:-1]) + ", and " + summary_points[-1] + "."
-    else:
-        final_summary_text += "a mixed profile requiring careful review." # Fallback
-
-    # Determine color based on final score
-    summary_color = neg_color if final_score < 0 else (pos_color if final_score > 1 else '') # Neutral for scores near 0-1
-
-    print(hr("-", 40))
-    print(colorize(final_summary_text, summary_color if final_score != 0 else '')) # Avoid coloring if score is exactly 0
-    # --- End Deal Analysis & Summary ---
-
     print(hr("="))
-    if args.verbose: print("DEBUG: Analysis printing complete.", flush=True)
+    if args_dict.get('verbose'): print("DEBUG: Analysis printing complete.", flush=True)
 
 
-# --- Main Execution ---
+# --- Main Function Definition ---
 def main():
     # Initial load of config to pass to argparse for its internal defaults for --config-path
-    # This means --config-path itself defaults to DEFAULT_CONFIG_PATH
-    # If user provides --config-path on CLI, it will be used by argparse.
-    
-    # Step 1: Parse arguments once to get the config_path (among others)
-    # We create a temporary parser just to get the config_path if specified.
     temp_parser = argparse.ArgumentParser(add_help=False)
-    temp_parser.add_argument("--config-path", default=str(DEFAULT_CONFIG_PATH), help="Path to JSON config file.")
-    known_args, _ = temp_parser.parse_known_args()
-    config_path_to_load = known_args.config_path
+    temp_parser.add_argument("--config-path", type=Path, default=DEFAULT_CONFIG_PATH, help="Path to the JSON config file.")
+    temp_args, _ = temp_parser.parse_known_args()
 
-    config = load_config(config_path_to_load)
-
-    # Step 2: Parse all arguments, now providing the loaded config.
-    # The parse_arguments function will handle Config > CLI > Script Default precedence.
-    args = parse_arguments(config)
-
-
-    if args.capex_guide:
-        print_capex_guide(args) # Pass args for verbose
-        return
+    config = load_config(temp_args.config_path)
+    args = parse_arguments(config) 
 
     if args.verbose:
         print("--- Initial Arguments & Config ---")
-        print(f"Using config file: {args.config_path}") # This will be the resolved one
-        print(f"Loaded config: {json.dumps(config, indent=2)}")
+        print(f"Using config file: {temp_args.config_path}")
+        # Conditional print of full config for debugging, can be large
+        # if os.environ.get("DEBUG_CONFIG") == "true":
+        #    print(f"Loaded config: {json.dumps(config, indent=2)}")
+        # else:
+        print(f"Loaded config: {{keys: {list(config.keys())}}}") # Print only keys for brevity
         print(f"Arguments after parsing (Config > CLI > ScriptDefault): {vars(args)}")
 
-    # Step 3: Fetch property data from DB (DB is highest precedence for specific fields)
+    if args.capex_guide:
+        print_capex_guide(args)
+        return
+
     property_data = fetch_property_data(args.db_path, args.address, args.verbose)
-
     if not property_data:
-        print(f"Could not retrieve data for address: {args.address}. Exiting.", file=sys.stderr)
+        print(f"Error: Property with address '{args.address}' not found in {args.db_path}", file=sys.stderr)
         return
 
-    if args.verbose:
-        print("--- Property Data from DB ---")
-        print(json.dumps(property_data, indent=2))
-
-    # Step 4: Determine effective parameters using DB > Config > CLI > Script Default
-    # For most args, this is already handled by parse_arguments taking 'config'.
-    # Now we explicitly override with DB data where applicable.
-
-    eff_config = config # Use the already loaded config
-
-    # Fields to be taken from DB if available, otherwise from args (which already factored in config/CLI)
-    db_price = property_data.get("price")
-    db_sqft = property_data.get("sqft")
-    db_prop_age = property_data.get("calculated_property_age")
-    db_zip = property_data.get("zip")
-    # These are not direct args but used in calculations
-    db_tax_info_raw = property_data.get("tax_information_raw")
-    db_est_rent_raw = property_data.get("estimated_rent_raw")
-
-
-    # Create a dictionary for effective parameters that will be passed to analysis functions
-    # Start with args (which are Config > CLI > Script Default)
-    effective_params = vars(args).copy()
-
-    # Override with DB values if they exist and are valid
-    if db_price is not None and db_price > 0:
-        effective_params["purchase_price"] = db_price # This will be used by financial_components
-    elif 'purchase_price' not in effective_params or effective_params.get('purchase_price') is None:
-        # If price isn't in DB and not otherwise set (e.g. if we ever add --price CLI/config)
-        # This path should ideally not be hit if price is always in DB for a found property.
-        print(f"Error: Purchase price not found in DB for {args.address} and not otherwise specified.", file=sys.stderr)
-        return
-
-
-    if db_sqft is not None and db_sqft > 0:
-        effective_params["square_feet"] = db_sqft
-    if db_prop_age is not None: # Can be 0 for new construction
-        effective_params["property_age"] = db_prop_age
+    city_for_historical_lookup = property_data.get("city")
+    if not city_for_historical_lookup and args.target_city_for_historical:
+        city_for_historical_lookup = args.target_city_for_historical
     
-    # For rent and tax, they are not direct CLI args but are passed to financial_components
-    # So, ensure property_data values are used by financial_components call
-    effective_params["tax_information_raw"] = db_tax_info_raw
-    effective_params["estimated_rent_raw"] = db_est_rent_raw
+    if args.verbose and city_for_historical_lookup:
+        source_city_msg = "from listings.db" if property_data.get("city") else "from CLI argument"
+        print(f"Info: Using target city '{city_for_historical_lookup}' {source_city_msg} for historical lookup.")
+    elif args.verbose and not city_for_historical_lookup and args.use_historical_metric:
+        print(f"Warning: Historical metric lookup is enabled but no target city determined. Lookup may fail.")
 
+    neighborhood_appreciation_data_from_config = config.get("neighborhood_appreciation_data", {})
+    zip_to_neighborhood_mapping = config.get("zip_to_neighborhood_mapping", {})
+    effective_neighborhood_name_for_analysis = args.neighborhood
 
-    # Resolve neighborhood: CLI > ZIP Mapping > Config Default ("neighborhood" key) > Script Default ("default")
-    neighborhood_appreciation_config_data = eff_config.get("neighborhood_appreciation_data", {})
-    zip_to_neighborhood_mapping = eff_config.get("zip_to_neighborhood_mapping", {})
+    if not effective_neighborhood_name_for_analysis:
+        db_zip = property_data.get("zip")
+        if db_zip:
+            inferred_neighborhood_key = zip_to_neighborhood_mapping.get(str(db_zip))
+            if inferred_neighborhood_key:
+                effective_neighborhood_name_for_analysis = inferred_neighborhood_key
+                if args.verbose: print(f"Info: Inferred neighborhood '{effective_neighborhood_name_for_analysis}' from ZIP '{db_zip}'.")
+            elif args.verbose: print(f"Warning: ZIP '{db_zip}' not in zip_to_neighborhood_mapping.")
     
-    effective_neighborhood_name = args.neighborhood # 1. CLI
-    if not effective_neighborhood_name and db_zip:    # 2. ZIP Mapping
-        effective_neighborhood_name = zip_to_neighborhood_mapping.get(str(db_zip))
-        if effective_neighborhood_name and args.verbose:
-            print(f"Info: Inferred neighborhood '{effective_neighborhood_name}' from ZIP '{db_zip}'.")
-    if not effective_neighborhood_name:               # 3. Config "neighborhood" field
-        effective_neighborhood_name = eff_config.get("neighborhood")
-    if not effective_neighborhood_name:               # 4. Fallback to literal "default"
-        effective_neighborhood_name = "default"
-        if args.verbose:
-            print(f"Info: Using default neighborhood '{effective_neighborhood_name}'.")
+    if not effective_neighborhood_name_for_analysis:
+        effective_neighborhood_name_for_analysis = config.get("neighborhood")
+        if args.verbose and effective_neighborhood_name_for_analysis: print(f"Info: Using general neighborhood '{effective_neighborhood_name_for_analysis}' from config.")
 
+    if not effective_neighborhood_name_for_analysis:
+        effective_neighborhood_name_for_analysis = SCRIPT_DEFAULTS.get("neighborhood", "default")
+        if args.verbose: print(f"Info: Using script default neighborhood: '{effective_neighborhood_name_for_analysis}'.")
+    
+    true_manual_cli_appreciation_rate = None 
+    try:
+        idx = sys.argv.index('--appreciation-rate')
+        if idx + 1 < len(sys.argv) and not sys.argv[idx + 1].startswith('--'):
+            true_manual_cli_appreciation_rate = args.appreciation_rate 
+            if args.verbose: print(f"DEBUG: CLI override --appreciation-rate IS SET with value: {true_manual_cli_appreciation_rate}")
+        elif args.verbose:
+             print(f"DEBUG: CLI flag --appreciation-rate found but no value followed. Not an override.")
+    except ValueError:
+        if args.verbose: print(f"DEBUG: CLI override --appreciation-rate IS NOT SET in sys.argv.")
 
-    if args.verbose:
-        print("--- Effective Parameters for Analysis ---")
-        print(f"Purchase Price (for calc): {effective_params.get('purchase_price')}")
-        print(f"Square Feet (for calc): {effective_params.get('square_feet')}")
-        print(f"Property Age (for calc): {effective_params.get('property_age')}")
-        print(f"Neighborhood (for calc): {effective_neighborhood_name}")
-        print(f"Raw Tax Info (for calc): {effective_params.get('tax_information_raw')}")
-        print(f"Raw Est. Rent (for calc): {effective_params.get('estimated_rent_raw')}")
-        # Print other key effective_params if needed for debugging
-        # for k, v in effective_params.items():
-        #     if k not in ['purchase_price', 'square_feet', 'property_age', 'tax_information_raw', 'estimated_rent_raw']:
-        #         print(f"{k}: {v}")
+    analysis_args_dict = vars(args).copy()
+    analysis_args_dict['target_city_for_historical'] = city_for_historical_lookup
+    analysis_args_dict['appreciation_rate'] = true_manual_cli_appreciation_rate
 
-
-    # Call the main analysis function with the resolved effective parameters
     run_analysis_and_print(
-        args=argparse.Namespace(**effective_params), # Pass the fully resolved params
-        property_data=property_data, # Still pass original DB data for reference if needed by run_analysis_and_print
-        neighborhood_data_from_config=neighborhood_appreciation_config_data,
-        effective_neighborhood_name_for_analysis=effective_neighborhood_name
+        args_dict=analysis_args_dict, 
+        property_data=property_data,
+        neighborhood_data_from_config=neighborhood_appreciation_data_from_config,
+        effective_neighborhood_name_for_analysis=effective_neighborhood_name_for_analysis
     )
 
+# --- Script Entry Point ---
 if __name__ == "__main__":
     main()

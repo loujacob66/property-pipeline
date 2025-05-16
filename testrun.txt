@@ -1,0 +1,250 @@
+--- Initial Arguments & Config ---
+Using config file: /Users/ljacob/dev/property-pipeline/config/cashflow_config.json
+Loaded config: {
+  "down_payment": 350000.0,
+  "rate": 6.75,
+  "insurance": 4000.0,
+  "misc_monthly": 100.0,
+  "loan_term": 30,
+  "vacancy_rate": 5.0,
+  "property_mgmt_fee": 0.0,
+  "maintenance_percent": 1.0,
+  "capex_percent": 1.0,
+  "utilities_monthly": 0.0,
+  "property_age": 50,
+  "property_condition": "good",
+  "square_feet": 1400.0,
+  "use_dynamic_capex": false,
+  "verbose": false,
+  "appreciation_rate": 7,
+  "neighborhood": "default",
+  "investment_horizon": 10,
+  "fetch_real_appreciation": true,
+  "neighborhood_appreciation_data": {
+    "five_points": {
+      "short_term_outlook": "strong",
+      "long_term_outlook": "very_strong",
+      "historical_appreciation": 6.8
+    },
+    "highland": {
+      "short_term_outlook": "strong",
+      "long_term_outlook": "strong",
+      "historical_appreciation": 6.2
+    },
+    "cherry_creek": {
+      "short_term_outlook": "moderate",
+      "long_term_outlook": "strong",
+      "historical_appreciation": 5.9
+    },
+    "wash_park": {
+      "short_term_outlook": "strong",
+      "long_term_outlook": "strong",
+      "historical_appreciation": 6.5
+    },
+    "stapleton": {
+      "short_term_outlook": "strong",
+      "long_term_outlook": "moderate",
+      "historical_appreciation": 5.7
+    },
+    "lodo": {
+      "short_term_outlook": "moderate",
+      "long_term_outlook": "strong",
+      "historical_appreciation": 6.0
+    },
+    "default": {
+      "short_term_outlook": "moderate",
+      "long_term_outlook": "moderate",
+      "historical_appreciation": 5.0
+    },
+    "Arvada_General": {
+      "short_term_outlook": "moderate",
+      "long_term_outlook": "To be determined",
+      "historical_appreciation": 5.0
+    },
+    "Wheat_Ridge_General": {
+      "short_term_outlook": "moderate",
+      "long_term_outlook": "moderate",
+      "historical_appreciation": 5.0
+    },
+    "Lakewood_General": {
+      "short_term_outlook": "moderate",
+      "long_term_outlook": "moderate",
+      "historical_appreciation": 5.0
+    },
+    "Denver_General": {
+      "short_term_outlook": "moderate",
+      "long_term_outlook": "moderate",
+      "historical_appreciation": 5.0
+    }
+  },
+  "zip_to_neighborhood_mapping": {
+    "80001": "Arvada_General",
+    "80002": "olde_town_arvada",
+    "80003": "club_crest",
+    "80004": "olde_town_arvada",
+    "80005": "Arvada_General",
+    "80006": "Arvada_General",
+    "80007": "Arvada_General",
+    "80012": "Denver_General",
+    "80014": "Denver_General",
+    "80022": "Denver_General",
+    "80033": "applewood_villages",
+    "80034": "applewood_villages",
+    "80123": "Lakewood_General",
+    "80127": "Denver_General",
+    "80202": "lodo",
+    "80203": "Denver_General",
+    "80204": "sloan_lake",
+    "80205": "five_points",
+    "80206": "cherry_creek",
+    "80207": "Denver_General",
+    "80209": "wash_park",
+    "80210": "Denver_General",
+    "80211": "highland",
+    "80212": "highland",
+    "80214": "applewood_valley",
+    "80215": "green_mountain_village",
+    "80216": "Denver_General",
+    "80218": "Denver_General",
+    "80219": "Denver_General",
+    "80220": "Denver_General",
+    "80221": "berkeley",
+    "80222": "Denver_General",
+    "80223": "Denver_General",
+    "80224": "Denver_General",
+    "80225": "Lakewood_General",
+    "80226": "Lakewood_General",
+    "80227": "Lakewood_General",
+    "80228": "Lakewood_General",
+    "80229": "Denver_General",
+    "80230": "Denver_General",
+    "80231": "Denver_General",
+    "80232": "Lakewood_General",
+    "80233": "Denver_General",
+    "80234": "Denver_General",
+    "80235": "Lakewood_General",
+    "80236": "Denver_General",
+    "80237": "Denver_General",
+    "80238": "stapleton",
+    "80239": "Denver_General",
+    "80241": "Denver_General",
+    "80246": "Denver_General",
+    "80247": "Denver_General",
+    "80249": "Denver_General",
+    "80260": "Denver_General",
+    "80290": "Denver_General",
+    "80293": "Denver_General",
+    "80294": "Denver_General",
+    "80401": "Lakewood_General",
+    "80403": "olde_town_arvada",
+    "80465": "Lakewood_General",
+    "PLEASE_ADD_MORE_ZIPS": "corresponding_neighborhood_key"
+  }
+}
+Arguments after parsing (Config > CLI > ScriptDefault): {'address': '9840 41st Avenue', 'down_payment': 350000.0, 'rate': 6.75, 'insurance': 4000.0, 'misc_monthly': 100.0, 'loan_term': 30, 'db_path': '/Users/ljacob/dev/property-pipeline/data/listings.db', 'config_path': '/Users/ljacob/dev/property-pipeline/config/cashflow_config.json', 'vacancy_rate': 5.0, 'property_mgmt_fee': 0.0, 'maintenance_percent': 1.0, 'capex_percent': 1.0, 'utilities_monthly': 0.0, 'property_age': 50, 'property_condition': 'good', 'square_feet': 1400.0, 'use_dynamic_capex': False, 'capex_guide': False, 'verbose': True, 'appreciation_rate': 7, 'neighborhood': None, 'investment_horizon': 10, 'fetch_real_appreciation': True, 'neighborhood_analysis_db_path': '/Users/ljacob/dev/property-pipeline/data/neighborhood_analysis.db', 'use_historical_metric': 'median_sale_price_annual_YoY', 'target_city_for_historical': None}
+--- Property Data from DB ---
+{
+  "price": 465000,
+  "tax_information_raw": "$2,999",
+  "estimated_rent_raw": 1899.6313131313134,
+  "id": 1,
+  "sqft": 1188.0,
+  "year_built_raw": null,
+  "calculated_property_age": null,
+  "zip": "80033",
+  "city": "Wheat Ridge"
+}
+Info: Inferred neighborhood 'applewood_villages' from ZIP '80033'.
+Info: Using target city 'Wheat Ridge' from listings.db for historical lookup.
+--- Effective Parameters for Analysis ---
+Purchase Price (for calc): 465000
+Square Feet (for calc): 1188.0
+Property Age (for calc): 50
+Neighborhood (for calc): applewood_villages
+Raw Tax Info (for calc): $2,999
+Raw Est. Rent (for calc): 1899.6313131313134
+Using Historical Metric: median_sale_price_annual_YoY
+Historical DB Path: /Users/ljacob/dev/property-pipeline/data/neighborhood_analysis.db
+Target City for Historical (resolved): Wheat Ridge
+DEBUG: Running analysis for property: {'price': 465000, 'tax_information_raw': '$2,999', 'estimated_rent_raw': 1899.6313131313134, 'id': 1, 'sqft': 1188.0, 'year_built_raw': None, 'calculated_property_age': None, 'zip': '80033', 'city': 'Wheat Ridge'}
+DEBUG: Neighborhood appreciation data being used (full config map): {'five_points': {'short_term_outlook': 'strong', 'long_term_outlook': 'very_strong', 'historical_appreciation': 6.8}, 'highland': {'short_term_outlook': 'strong', 'long_term_outlook': 'strong', 'historical_appreciation': 6.2}, 'cherry_creek': {'short_term_outlook': 'moderate', 'long_term_outlook': 'strong', 'historical_appreciation': 5.9}, 'wash_park': {'short_term_outlook': 'strong', 'long_term_outlook': 'strong', 'historical_appreciation': 6.5}, 'stapleton': {'short_term_outlook': 'strong', 'long_term_outlook': 'moderate', 'historical_appreciation': 5.7}, 'lodo': {'short_term_outlook': 'moderate', 'long_term_outlook': 'strong', 'historical_appreciation': 6.0}, 'default': {'short_term_outlook': 'moderate', 'long_term_outlook': 'moderate', 'historical_appreciation': 5.0}, 'Arvada_General': {'short_term_outlook': 'moderate', 'long_term_outlook': 'To be determined', 'historical_appreciation': 5.0}, 'Wheat_Ridge_General': {'short_term_outlook': 'moderate', 'long_term_outlook': 'moderate', 'historical_appreciation': 5.0}, 'Lakewood_General': {'short_term_outlook': 'moderate', 'long_term_outlook': 'moderate', 'historical_appreciation': 5.0}, 'Denver_General': {'short_term_outlook': 'moderate', 'long_term_outlook': 'moderate', 'historical_appreciation': 5.0}}
+DEBUG: Effective neighborhood name for this analysis: applewood_villages
+DEBUG: Using arg/config for age: 50 (DB year: None)
+DEBUG: Attempting to fetch historical metric 'median_sale_price_annual_YoY' for neighborhood 'applewood_villages' (City: Wheat Ridge) from DB: /Users/ljacob/dev/property-pipeline/data/neighborhood_analysis.db
+DEBUG (Historical): Querying historical DB: 
+            SELECT na.value
+            FROM neighborhood_appreciation na
+            JOIN neighborhood_data nd ON na.neighborhood_data_id = nd.id
+            WHERE 
+                na.metric_type = ? 
+                AND nd.property_type = 'Single Family Residential'
+                AND nd.homes_sold >= ?
+         AND lower(nd.city) = ? AND lower(nd.neighborhood_name) = ? ORDER BY nd.period_end DESC LIMIT 1 with params ['median_sale_price_annual_YoY', 5, 'wheat ridge', 'applewood villages']
+DEBUG (Historical): Retrying with LIKE query: 
+                SELECT na.value
+                FROM neighborhood_appreciation na
+                JOIN neighborhood_data nd ON na.neighborhood_data_id = nd.id
+                WHERE 
+                    na.metric_type = ? 
+                    AND nd.property_type = 'Single Family Residential'
+                    AND nd.homes_sold >= ?
+             AND lower(nd.city) = ? AND lower(nd.neighborhood_name) LIKE ? ORDER BY nd.period_end DESC LIMIT 1 with params ['median_sale_price_annual_YoY', 5, 'wheat ridge', '%applewood villages%']
+DEBUG (Historical): No historical metric found for 'applewood_villages' (City: Wheat Ridge, Metric: median_sale_price_annual_YoY) after all attempts.
+DEBUG: Historical metric 'median_sale_price_annual_YoY' not found or invalid for 'applewood_villages'. Proceeding to other sources.
+DEBUG: --fetch-real-appreciation is TRUE. Attempting to use STUBBED real data source.
+DEBUG: Using STUBBED data: Appr: 6.80%, Outlook: very_strong (stub)
+DEBUG: Manually overriding appreciation rate to: 7.00% (Outlook: manual_override, Source: CLI Manual Rate Override)
+INFO: Final effective appreciation rate: 7.00%, Outlook: manual_override, Source: CLI Manual Rate Override
+================================================================================
+REAL ESTATE INVESTMENT ANALYSIS: 9840 41st Avenue
+Analysis Date: May 09, 2025
+================================================================================
+
+-------------------------- PROPERTY & LOAN DETAILS --------------------------
+Purchase Price:                     $465,000.00
+Square Footage:                     1188 sq ft
+Property Age:                       50 years
+Property Condition:                 GOOD
+Down Payment:                       $350,000.00 (75.27%)
+Loan Amount:                        $115,000.00
+Interest Rate:                      6.75%
+Loan Term:                          30 years
+
+------------------------- MONTHLY CASHFLOW ANALYSIS -------------------------
+Gross Monthly Rent:                 $1,899.63
+Mortgage (P&I):                     $745.89
+Property Taxes:                     $249.92
+Insurance:                          $333.33
+Misc. Monthly Costs:                $100.00
+----------------------------------------
+Total Monthly Expenses:             $1,429.14
+----------------------------------------
+Net Monthly Cashflow:               $470.49
+Annual Cashflow:                    $5,645.92
+Cash-on-Cash ROI:                   1.61%
+
+---------------------- LONG-TERM PROJECTION (10 YEARS) ----------------------
+Investment Horizon:                 10 years
+Annual Appreciation Rate:           7.00% (Market: manual_override, Source: CLI Manual Rate Override)
+Est. Future Property Value:         $914,725.38
+Total Property Appreciation:        $449,725.38
+Equity from Paydown:                $16,903.85
+Remaining Loan Balance:             $98,096.15
+Total Equity at Horizon:            $816,629.23
+Total Cashflow during Horizon:      $56,459.22
+----------------------------------------
+Total Estimated Profit:             $523,088.45
+Total ROI (on initial equity):      149.45%
+Annualized ROI (on equity):         9.57%
+
+-------------------------- DEAL ANALYSIS & SUMMARY --------------------------
+Overall Investment Score:           3.0/10 (Fair Investment Prospect, Potential Upsides)
+----------------------------------------
+Net Monthly Cashflow:               $470.49 (Rating: Excellent, Score: 2.5)
+Cash-on-Cash ROI:                   1.61% (Rating: Poor, Score: 0.0)
+Cap Rate (NOI Based):               N/A (Requires Dynamic CapEx mode)
+Annualized Total ROI (Equity):      9.57% (Score: 0.5)
+----------------------------------------
+SUMMARY (3.0/10 - Fair Investment Prospect, Potential Upsides): This property shows strong positive cashflow, moderate CoC ROI, Cap Rate not assessed (Dynamic CapEx off), and moderate long-term total returns expected.
+================================================================================
+DEBUG: Analysis printing complete.
