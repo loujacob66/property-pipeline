@@ -12,6 +12,7 @@ Usage:
                                         --rate <ANNUAL_RATE> \
                                         --insurance <ANNUAL_INSURANCE> \
                                         --misc-monthly <MONTHLY_MISC> \
+                                        [--rent <MONTHLY_RENT>] \
                                         [--other_options...]
 """
 
@@ -116,6 +117,7 @@ def parse_arguments(config):
     parser.add_argument("--rate", type=float, default=config.get("rate"), help="Annual interest rate (e.g., 5.5).")
     parser.add_argument("--insurance", type=float, default=config.get("insurance"), help="Annual insurance cost.")
     parser.add_argument("--misc-monthly", type=float, default=config.get("misc_monthly"), help="Miscellaneous monthly costs.")
+    parser.add_argument("--rent", type=float, default=config.get("rent"), help="Monthly rent amount. If not provided, will use value from database.")
 
     # Other args using the helper for Config > ScriptDefault precedence for their *defaults*
     parser.add_argument("--loan-term", type=int, default=get_default_val("loan_term"), help="Loan term in years.")
@@ -727,10 +729,17 @@ def run_analysis_and_print(args_dict, property_data, neighborhood_data_from_conf
     if property_data.get("calculated_property_age") is not None: actual_prop_age = property_data["calculated_property_age"]
     elif args_dict.get('verbose'): print(f"DEBUG: Using arg/config for age: {actual_prop_age} (DB year: {property_data.get('year_built_raw')})", flush=True)
 
+    # Use CLI rent if provided, otherwise use DB rent
+    actual_rent = args_dict.get('rent')
+    if actual_rent is None:
+        actual_rent = property_data.get("estimated_rent_raw")
+        if args_dict.get('verbose'): print(f"DEBUG: Using rent from database: {actual_rent}", flush=True)
+    elif args_dict.get('verbose'): print(f"DEBUG: Using CLI provided rent: {actual_rent}", flush=True)
+
     financials = calculate_financial_components(
         purchase_price=property_data["price"],
         tax_info_raw=property_data["tax_information_raw"],
-        est_monthly_rent=property_data["estimated_rent_raw"],
+        est_monthly_rent=actual_rent,  # Use the determined rent value
         down_payment_dollars=args_dict.get('down_payment'),
         annual_rate_percent=args_dict.get('rate'),
         loan_term_years=args_dict.get('loan_term'),
