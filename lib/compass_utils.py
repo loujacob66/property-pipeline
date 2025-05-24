@@ -78,9 +78,18 @@ def authenticate_compass(playwright, headless=False, max_retries=3):
     try:
         # Launch persistent context
         print("Launching browser with persistent context...")
+        
+        browser_args = []
+        if headless:
+            # Set a realistic User-Agent for headless mode
+            # Using a common User-Agent string
+            user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/99.0.4844.82 Safari/537.36'
+            browser_args.append(f'--user-agent={user_agent}')
+
         browser_context = playwright.chromium.launch_persistent_context(
             user_data_dir=AUTH_STORAGE_PATH,
-            headless=headless
+            headless=headless,
+            args=browser_args
         )
         
         # Use existing page or create a new one
@@ -88,43 +97,113 @@ def authenticate_compass(playwright, headless=False, max_retries=3):
             page = browser_context.pages[0]
         else:
             page = browser_context.new_page()
-        
+
+        if headless:
+            # Set viewport size for headless mode
+            try:
+                page.set_viewport_size({'width': 1920, 'height': 1080})
+                print("ℹ️ Set viewport size to 1920x1080 for headless mode")
+            except Exception as e:
+                print(f"⚠️ Warning: Could not set viewport size in headless mode: {e}")
+
         # Check if we have a valid session
-        if is_session_valid():
-            print("Checking existing session...")
-            if verify_authentication(page):
-                print("✅ Using existing valid session")
-                return page, browser_context
-            else:
-                print("⚠️ Existing session is invalid")
+        session_is_valid_initially = is_session_valid()
         
-        # Need to authenticate
+        if session_is_valid_initially:
+            print("Checking existing session...")
+            try:
+                if verify_authentication(page):
+                    print("✅ Using existing valid session")
+                    return page, browser_context
+                else:
+                    print("⚠️ Existing session is invalid or verification failed.")
+                    if headless:
+                        print("❌ Headless authentication failed: Existing session is invalid. Please run in headed mode to refresh session.")
+                        raise Exception("Headless authentication failed: Invalid session. Re-authenticate in headed mode.")
+            except PlaywrightTimeoutError as pte:
+                print(f"❌ Timeout during session verification: {pte}")
+                if headless:
+                    print("❌ Headless authentication failed during session verification. Please run in headed mode to refresh session.")
+                    raise Exception("Headless authentication failed: Timeout during session verification. Re-authenticate in headed mode.")
+            except Exception as e:
+                print(f"❌ Error during session verification: {e}")
+                if headless:
+                    print("❌ Headless authentication failed during session verification. Please run in headed mode to refresh session.")
+                    raise Exception("Headless authentication failed: Error during session verification. Re-authenticate in headed mode.")
+        
+        # If headless and session is not valid initially, fail fast.
+        if headless and not session_is_valid_initially:
+            print("❌ Headless authentication failed: No valid session found. Please run in headed mode to authenticate and create a session.")
+            raise Exception("Headless authentication failed: No valid session. Re-authenticate in headed mode.")
+
+        # Need to authenticate (this part is primarily for headed mode)
         print("\n🔐 Authentication required")
+        if headless: # Should ideally not reach here if session_is_valid_initially was false
+             print("⚠️ Headless mode: Authentication cannot proceed without a valid existing session.")
+             print("   Please run in headed mode first to establish a session.")
+             raise Exception("Headless authentication cannot proceed without a valid session.")
+
         print("⚠️ Please complete the login process in the opened browser")
         print("   This may include logging in with Google or other authentication methods")
         
-        # Navigate to workspace login page
-        page.goto("https://www.compass.com/workspace/", timeout=30000)
-        
-        # Wait for user to complete authentication
+        try:
+            # Navigate to workspace login page
+            page.goto("https://www.compass.com/workspace/", timeout=60000) # Increased timeout for initial load
+        except PlaywrightTimeoutError as pte:
+            print(f"❌ Timeout navigating to login page: {pte}")
+            raise Exception("Timeout navigating to login page. Check internet connection or Compass status.")
+        except Exception as e:
+            print(f"❌ Error navigating to login page: {e}")
+            raise Exception(f"Error navigating to login page: {e}")
+
+        # Wait for user to complete authentication (manual login process)
         max_wait_seconds = 300  # 5 minutes timeout
         start_time = time.time()
         
         while time.time() - start_time < max_wait_seconds:
-            time.sleep(2)
+            time.sleep(2) # Check every 2 seconds
             current_url = page.url
             
+            # Check if successfully navigated away from login and on compass.com
             if "/login/" not in current_url and "compass.com" in current_url:
-                if verify_authentication(page):
-                    print("✅ Login successful")
-                    save_session_state()
-                    return page, browser_context
-        
-        print("⚠️ Authentication timed out")
-        raise Exception("Authentication timed out")
+                try:
+                    if verify_authentication(page): # verify_authentication already has a timeout
+                        print("✅ Login successful")
+                        save_session_state()
+                        return page, browser_context
+                except PlaywrightTimeoutError as pte:
+                    print(f"⏳ Verification timed out post-login attempt: {pte}. Will retry if time permits.")
+                except Exception as e:
+                    print(f"⚠️ Error during post-login verification attempt: {e}. Will retry if time permits.")
+            
+            # Additional check: if still on login page after some time, prompt or log
+            if time.time() - start_time > 60 and "/login/" in current_url:
+                print("ℹ️ Still on login page after 1 minute...")
+
+
+        print("⚠️ Authentication timed out after manual login period.")
+        if headless: # This case should ideally not be reached if logic is correct
+            print("❌ Headless authentication timed out. This should not happen if session was initially invalid.")
+            print("   Ensure you run in headed mode first to establish a session.")
+        raise Exception("Authentication timed out after manual login period.")
         
     except Exception as e:
-        print(f"❌ Error during authentication: {e}")
+        # Log the specific error message from the exception
+        error_message = str(e)
+        # Check if the error message already contains the advice to run in headed mode
+        headed_mode_advice = "Please run in headed mode"
+        if headed_mode_advice not in error_message:
+            final_error_message = f"❌ Error during authentication: {error_message}"
+            # Add specific advice for headless failures if not already present
+            if headless and "Headless authentication failed" not in error_message :
+                 final_error_message += " Consider running in headed mode to resolve."
+        else:
+            final_error_message = f"❌ Error during authentication: {error_message}"
+
+        print(final_error_message)
+        
+        # Only print traceback if it's not a "known" handled failure like timeout needing headed mode.
+        # Or if more detailed debugging is needed. For now, let's keep it for all errors.
         traceback.print_exc()
         if browser_context:
             browser_context.close()

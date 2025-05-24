@@ -15,8 +15,11 @@ Options:
 """
 
 import os
-# import sys # No longer needed for sys.path manipulation here
-# sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) # Redundant path manipulation
+import os # Ensure os is imported
+import sys # Ensure sys is imported for path manipulation
+# Add the parent directory of 'lib' to sys.path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from lib.compass_utils import authenticate_compass # Added import
 
 import sqlite3
 import time
@@ -28,13 +31,13 @@ from playwright.sync_api import sync_playwright
 import random
 from pathlib import Path
 from datetime import datetime
-# from lib.compass_utils import authenticate_compass, extract_listing_details # Not used, assuming logic is inline or different
+# from lib.compass_utils import extract_listing_details # Not used, assuming logic is inline or different
 from urllib.parse import urlparse, parse_qs
 
 # Define project root and database path
 ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = ROOT / 'data' / 'listings.db'
-AUTH_STORAGE_PATH = ROOT / ".auth" / "compass"
+# AUTH_STORAGE_PATH is managed by authenticate_compass
 
 def fetch_listings_needing_enrichment(query):
     """
@@ -208,7 +211,7 @@ def fix_existing_mls_types():
     
     conn.close()
 
-def enrich_listings_with_compass(max_listings=None):
+def enrich_listings_with_compass(max_listings=None, headless=False): # Added headless parameter
     # First fix existing MLS types
     fix_existing_mls_types()
     
@@ -238,27 +241,15 @@ def enrich_listings_with_compass(max_listings=None):
         print(f"🔎 Found {len(listings)} listing(s) needing enrichment.")
 
     with sync_playwright() as p:
-        # Set up persistent context with saved authentication
-        # ROOT = Path(__file__).parent.parent # Defined globally
-        # AUTH_STORAGE_PATH = ROOT / ".auth" / "compass" # Defined globally
-        AUTH_STORAGE_PATH.mkdir(parents=True, exist_ok=True)
-
-        print("🌐 Launching browser with saved authentication...")
-        context = p.chromium.launch_persistent_context(
-            user_data_dir=str(AUTH_STORAGE_PATH),
-            headless=False
-        )
-
-        page = context.pages[0]  # use the first (blank) page
-        
-        # Check if we need to authenticate
-        page.goto("https://www.compass.com/")
-        if "login" in page.url:
-            print("⚠️ Not authenticated. Please log in in the browser window...")
-            page.wait_for_url("https://www.compass.com/**", timeout=0)  # Wait indefinitely for successful login
-            print("✅ Authentication successful!")
-        else:
-            print("✅ Using saved authentication")
+        try:
+            print("🔐 Authenticating with Compass...")
+            page, context = authenticate_compass(p, headless=headless)
+            print("✅ Authentication successful.")
+        except Exception as e:
+            print(f"❌ Authentication failed: {e}")
+            print("   Please try running in headed mode (without --headless) to resolve authentication issues.")
+            conn.close() # Close connection before returning
+            return # Exit if authentication fails
 
         for listing_id, url in listings:
             try:
@@ -336,11 +327,12 @@ def enrich_listings_with_compass(max_listings=None):
     print("🏁 Enrichment process completed.")
 
 def main():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description="Enrich Compass listings with details.") # Added description
     parser.add_argument('--max-listings', type=int, help='Maximum number of listings to process')
+    parser.add_argument('--headless', action='store_true', help='Run browser in headless mode') # Added headless argument
     args = parser.parse_args()
     
-    enrich_listings_with_compass(max_listings=args.max_listings)
+    enrich_listings_with_compass(max_listings=args.max_listings, headless=args.headless) # Pass headless argument
 
 if __name__ == "__main__":
     main()
