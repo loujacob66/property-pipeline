@@ -38,8 +38,39 @@ To ensure the scripts can run in headless mode (e.g., on a server or for automat
     python scripts/enrich_with_compass_details.py --headless
     ```
 
+### Using on a Headless Server
+
+If you need to run these scripts on a server that does not have a graphical display environment (a "headless" server), you cannot perform the initial graphical login directly on that server. Here's the recommended workflow:
+
+1.  **Generate Session Locally:** Perform the "First-Time Authentication Setup" (steps 1-3 described above) on your local machine or any machine *with* a graphical display. This will create and populate the `.auth/compass` directory in your project's root with the necessary authentication tokens.
+
+2.  **Securely Transfer `.auth/compass` Directory:** Once the `.auth/compass` directory is successfully created locally and contains an authenticated session, you need to transfer this entire directory to your headless server.
+    *   Place it in the same relative path within your project structure on the server. For example, if your project is deployed to `/srv/app/my_project/` on the server, the authentication directory should be `/srv/app/my_project/.auth/compass`.
+    *   Use secure transfer methods like `scp` or `sftp`. Example using `scp` (run from your local machine):
+        ```bash
+        # Ensure the .auth directory exists on the server
+        ssh your_user@your_server "mkdir -p /srv/app/my_project/.auth"
+        # Securely copy the compass session directory
+        scp -r .auth/compass your_user@your_server:/srv/app/my_project/.auth/
+        ```
+    *   **Security Warning:** The `.auth/compass` directory contains sensitive session information. Ensure it's transferred securely and that file permissions on the server are set appropriately to protect it (e.g., restrict read/write access to only the user running the scripts). **Never commit this directory to Git.**
+
+3.  **Run Scripts Headlessly on Server:** With the `.auth/compass` directory in place on the server, your enrichment scripts can now be run using the `--headless` flag. They will automatically use the pre-authenticated session data from the transferred directory.
+    ```bash
+    python scripts/enrich_compass_to_json.py --headless
+    # or
+    python scripts/enrich_with_compass.py --headless --limit 10
+    # or
+    python scripts/enrich_with_compass_details.py --headless --max-listings 5
+    ```
+
+4.  **Re-Authentication:** If the session expires over time (Compass.com may invalidate it), you'll need to repeat this process:
+    *   Delete the old `.auth/compass` directory from your server.
+    *   Re-generate the `.auth/compass` directory locally by running an enrichment script in headed mode and logging in again.
+    *   Securely transfer the new `.auth/compass` directory to the server.
+
 ### Authentication Notes
 
-*   **Session Validity:** The saved authentication session should remain valid for a considerable period, but Compass.com might invalidate it after some time (e.g., weeks or months). If you encounter authentication errors in headless mode after a while, repeat the steps above to re-authenticate in headed mode.
-*   **Security:** The `.auth/compass` directory contains sensitive session information. Ensure this directory is included in your `.gitignore` file (it should be by default if you're using a standard Python gitignore) and is not committed to your repository.
-*   **Multiple Environments:** If you run these scripts in different environments (e.g., local machine and a server), you will need to perform this first-time authentication setup in each environment where the scripts will run.
+*   **Session Validity:** The saved authentication session should remain valid for a considerable period, but Compass.com might invalidate it after some time (e.g., weeks or months). If you encounter authentication errors in headless mode, the first step is usually to regenerate the session locally and re-transfer it as described above.
+*   **Security:** The `.auth/compass` directory contains sensitive session information. Ensure this directory is included in your `.gitignore` file (it should be by default if you're using a standard Python gitignore) and is not committed to your repository. Protect it carefully during transfer and on the server.
+*   **Multiple Environments:** The note about multiple environments in the "First-Time Authentication Setup" is especially relevant for server setups. Each server or distinct environment where the scripts run will need its own copy of the `.auth/compass` directory, generated and transferred as described.
